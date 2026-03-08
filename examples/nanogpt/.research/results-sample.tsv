@@ -1,0 +1,6 @@
+timestamp	commit	primary_metric	metric_value	secondary_metrics	status	description
+2026-03-09T10:00:00Z	a1b2c3d	val_loss	1.520000	{"train_loss": 1.480}	keep	baseline: default shakespeare char config
+2026-03-09T10:15:00Z	e4f5g6h	val_loss	1.495000	{"train_loss": 1.450}	keep	cosine lr schedule with warmup
+2026-03-09T10:30:00Z	i7j8k9l	val_loss	1.550000	{"train_loss": 1.510}	discard	increased dropout to 0.3 (too aggressive)
+2026-03-09T10:45:00Z	m0n1o2p	val_loss	1.470000	{"train_loss": 1.420}	keep	added gradient clipping + weight decay tuning
+2026-03-09T11:00:00Z	q3r4s5t	val_loss	1.480000	{"train_loss": 1.440}	discard	doubled n_head (marginal, not worth complexity)

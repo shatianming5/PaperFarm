@@ -1,0 +1,12 @@
+mode: autonomous
+experiment:
+  timeout: 600
+  max_consecutive_crashes: 3
+metrics:
+  primary:
+    name: val_loss
+    direction: lower_is_better
+environment: |
+  Python 3.10+, PyTorch 2.0+
+  GPU recommended but CPU works for Shakespeare char-level
+  Dataset: Shakespeare char-level (data/shakespeare_char/)
