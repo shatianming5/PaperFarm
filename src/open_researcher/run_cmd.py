@@ -113,16 +113,41 @@ def _launch_exp_with_wait(
 
 
 def _make_safe_output(app_log_fn, log_path: Path):
-    """Create a robust output callback: writes log file FIRST, then TUI (never throws)."""
+    """Create a robust output callback: writes log file FIRST, then TUI (never throws).
+
+    Filters out the prompt echo that CLI agents (codex, claude) emit at startup.
+    The prompt is echoed between 'user' marker and first 'thinking'/'assistant' marker.
+    """
+    state = {"filtering": False, "prompt_done": False}
 
     def on_output(line: str):
-        # 1. Always write to log file first (this always works)
+        # 1. Always write to log file (full, unfiltered)
         try:
             with open(log_path, "a") as f:
                 f.write(line + "\n")
         except OSError:
             pass
-        # 2. Try to update TUI (may fail during startup race)
+
+        # 2. Filter prompt echo from TUI display
+        stripped = line.strip()
+        if not state["prompt_done"]:
+            # Detect start of prompt echo (codex outputs "user" then echoes the prompt)
+            if stripped == "user":
+                state["filtering"] = True
+                return
+            # Detect end of prompt echo
+            if state["filtering"] and stripped in ("thinking", "assistant"):
+                state["filtering"] = False
+                state["prompt_done"] = True
+                return
+            if state["filtering"]:
+                return  # skip prompt echo lines
+
+        # 3. Skip noisy internal markers
+        if stripped in ("thinking", "assistant", "user", ""):
+            return
+
+        # 4. Try to update TUI (may fail during startup race)
         try:
             app_log_fn(line)
         except Exception:
