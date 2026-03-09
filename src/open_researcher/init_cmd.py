@@ -31,7 +31,7 @@ def do_init(repo_path: Path, tag: str | None = None) -> None:
 
     # Render templates
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
-    context = {"tag": tag}
+    context = {"tag": tag, "goal": ""}
 
     research_dir.mkdir()
 

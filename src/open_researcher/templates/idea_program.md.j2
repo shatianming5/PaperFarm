@@ -28,16 +28,16 @@ Valid statuses: `analyzing`, `generating`, `searching`, `idle`
 
 ## Phase 1: Understand the Project
 
-1. Read the codebase: source files, tests, documentation
-2. Fill `.research/project-understanding.md` with your analysis
+1. Read `.research/project-understanding.md` — if already filled by the Scout Agent, use it as context
+2. If empty, read the codebase (source files, tests, documentation) and fill it with your analysis
 3. Update status: `{"status": "analyzing", "detail": "reading codebase"}`
 
 ## Phase 2: Research Related Work
 
-1. If web search is available (`config.yaml: research.web_search: true`):
+1. Read `.research/literature.md` — if already filled by the Scout Agent, use it as context
+2. If empty and web search is available (`config.yaml: research.web_search: true`):
    - Search 3-5 technical queries related to the project
-   - Read the most relevant results
-2. Fill `.research/literature.md`
+   - Read the most relevant results and fill `.research/literature.md`
 3. Update status: `{"status": "searching", "detail": "searching related work"}`
 
 ## Phase 3: Generate ONE Idea

@@ -42,7 +42,7 @@ def load_review_data(research_dir: Path) -> dict:
     }
 
 
-class ReviewScreen(Screen):
+class ReviewScreen(Screen[str | None]):
     """Full-screen review of Scout Agent analysis results."""
 
     BINDINGS = [

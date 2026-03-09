@@ -199,8 +199,14 @@ def do_start(
             watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: agent.terminate())
             watchdog.start()
             done = threading.Event()
+
+            def _single_agent_run():
+                done.wait()
+                watchdog.stop()
+
             _launch_agent_thread(agent, repo_path, on_output, done, exit_codes, "agent",
                                  program_file="program.md")
+            threading.Thread(target=_single_agent_run, daemon=True).start()
 
     def start_app():
         """Called on app mount (already on event loop thread)."""
