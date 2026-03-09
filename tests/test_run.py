@@ -124,3 +124,51 @@ def test_run_multi_dry_run_shows_agents(capsys):
         captured = capsys.readouterr()
         assert "Idea Agent" in captured.out
         assert "Experiment Agent" in captured.out
+
+
+def test_make_safe_output_colors_diff_lines(tmp_path):
+    from open_researcher.run_cmd import _make_safe_output
+
+    captured = []
+    log_file = tmp_path / "test.log"
+    cb = _make_safe_output(captured.append, log_file)
+
+    # Simulate prompt echo then real output
+    cb("user")
+    cb("thinking")  # ends prompt, shows separator
+
+    cb("diff --git a/foo.py b/foo.py")
+    cb("+added line")
+    cb("-removed line")
+    cb("@@ -1,3 +1,4 @@")
+    cb("step 200: val loss 1.34")
+    cb("ERROR: something broke")
+    cb("plain text")
+
+    # Separator should be present
+    assert any("Thinking" in line for line in captured)
+    # Diff lines should have markup
+    assert any("[green]" in line for line in captured)
+    assert any("[red]" in line for line in captured)
+    assert any("[bold red]" in line for line in captured)
+
+
+def test_make_safe_output_phase_separator(tmp_path):
+    from open_researcher.run_cmd import _make_safe_output
+
+    captured = []
+    log_file = tmp_path / "test.log"
+    cb = _make_safe_output(captured.append, log_file)
+
+    cb("user")
+    cb("thinking")  # ends prompt, shows thinking separator
+    assert any("Thinking" in line for line in captured)
+
+    cb("some thought")
+    cb("assistant")  # shows acting separator
+    assert any("Acting" in line for line in captured)
+
+    # The thought line should be dim italic (thinking phase)
+    thought_lines = [l for l in captured if "some thought" in l]
+    assert len(thought_lines) == 1
+    assert "[dim italic]" in thought_lines[0]

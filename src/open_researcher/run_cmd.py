@@ -112,44 +112,105 @@ def _launch_exp_with_wait(
     return t
 
 
-def _make_safe_output(app_log_fn, log_path: Path):
-    """Create a robust output callback: writes log file FIRST, then TUI (never throws).
+def _classify_line(line: str, phase: str) -> str:
+    """Add Rich markup to a log line based on its content."""
+    stripped = line.strip()
 
-    Filters out the prompt echo that CLI agents (codex, claude) emit at startup.
-    The prompt is echoed between 'user' marker and first 'thinking'/'assistant' marker.
-    """
-    state = {"filtering": False, "prompt_done": False}
+    # Escape literal brackets so Rich doesn't interpret them as markup
+    escaped = line.replace("[", "\\[")
+
+    # System messages
+    if stripped.startswith("[exp]") or stripped.startswith("[idea]"):
+        return f"[bold cyan]{escaped}[/bold cyan]"
+
+    # Diff coloring
+    if stripped.startswith("diff --git"):
+        return f"[bold white]{escaped}[/bold white]"
+    if stripped.startswith("file update:"):
+        return f"[bold magenta]{escaped}[/bold magenta]"
+    if stripped.startswith("@@"):
+        return f"[yellow]{escaped}[/yellow]"
+    if stripped.startswith("+") and not stripped.startswith("+++"):
+        return f"[green]{escaped}[/green]"
+    if stripped.startswith("-") and not stripped.startswith("---"):
+        return f"[red]{escaped}[/red]"
+
+    # Training output
+    if "step " in stripped and ("loss" in stripped or "iter" in stripped):
+        return f"[cyan]{escaped}[/cyan]"
+
+    # Errors
+    if "error" in stripped.lower() or "traceback" in stripped.lower():
+        return f"[bold red]{escaped}[/bold red]"
+
+    # Thinking phase → dim italic
+    if phase == "thinking":
+        return f"[dim italic]{escaped}[/dim italic]"
+
+    # Default
+    return f"[dim]{escaped}[/dim]"
+
+
+def _make_safe_output(app_log_fn, log_path: Path):
+    """Create output callback with log coloring and phase separators."""
+    state = {"filtering": False, "prompt_done": False, "phase": "acting"}
 
     def on_output(line: str):
-        # 1. Always write to log file (full, unfiltered)
+        # 1. Always write raw line to log file
         try:
             with open(log_path, "a") as f:
                 f.write(line + "\n")
         except OSError:
             pass
 
-        # 2. Filter prompt echo from TUI display
+        # 2. Filter prompt echo
         stripped = line.strip()
         if not state["prompt_done"]:
-            # Detect start of prompt echo (codex outputs "user" then echoes the prompt)
             if stripped == "user":
                 state["filtering"] = True
                 return
-            # Detect end of prompt echo
             if state["filtering"] and stripped in ("thinking", "assistant"):
                 state["filtering"] = False
                 state["prompt_done"] = True
+                # Show phase separator
+                if stripped == "thinking":
+                    state["phase"] = "thinking"
+                    try:
+                        app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
+                    except Exception:
+                        pass
+                else:
+                    state["phase"] = "acting"
+                    try:
+                        app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
+                    except Exception:
+                        pass
                 return
             if state["filtering"]:
-                return  # skip prompt echo lines
+                return
 
-        # 3. Skip noisy internal markers
-        if stripped in ("thinking", "assistant", "user", ""):
+        # 3. Phase transitions (after prompt is done)
+        if stripped == "thinking":
+            state["phase"] = "thinking"
+            try:
+                app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
+            except Exception:
+                pass
+            return
+        if stripped == "assistant":
+            state["phase"] = "acting"
+            try:
+                app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
+            except Exception:
+                pass
+            return
+        if stripped in ("user", ""):
             return
 
-        # 4. Try to update TUI (may fail during startup race)
+        # 4. Classify and color the line
+        colored = _classify_line(line, state["phase"])
         try:
-            app_log_fn(line)
+            app_log_fn(colored)
         except Exception:
             pass
 
