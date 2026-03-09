@@ -104,3 +104,20 @@ LogScreen #log-footer {
     background: $primary-background;
     padding: 0 1;
 }
+
+GoalInputModal {
+    align: center middle;
+}
+
+GoalInputModal > #goal-dialog {
+    width: 70;
+    height: auto;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+GoalInputModal #goal-hint {
+    color: $text-muted;
+    margin: 0 0 1 0;
+}

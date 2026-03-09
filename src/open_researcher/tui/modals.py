@@ -43,6 +43,34 @@ class AddIdeaModal(ModalScreen[dict | None]):
         self.dismiss(None)
 
 
+class GoalInputModal(ModalScreen[str | None]):
+    """Modal for entering an optional research goal before Scout analysis."""
+
+    BINDINGS = [("escape", "skip", "Skip")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="goal-dialog"):
+            yield Label("What would you like to optimize?")
+            yield Static("Enter a research goal, or press Enter to let the agent decide.", id="goal-hint")
+            yield Input(placeholder="e.g., reduce val_loss, improve throughput...", id="goal-input")
+            yield Button("Start Analysis", variant="primary", id="btn-start")
+            yield Button("Skip (no goal)", id="btn-skip")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-start":
+            goal = self.query_one("#goal-input", Input).value.strip()
+            self.dismiss(goal if goal else None)
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        goal = event.value.strip()
+        self.dismiss(goal if goal else None)
+
+    def action_skip(self) -> None:
+        self.dismiss(None)
+
+
 class GPUStatusModal(ModalScreen):
     """Modal showing GPU status across all hosts."""
 
