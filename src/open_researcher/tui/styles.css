@@ -1,0 +1,100 @@
+Screen {
+    background: $surface;
+}
+
+#stats-bar {
+    dock: top;
+    height: 1;
+    background: $primary-background;
+    color: $text;
+    padding: 0 1;
+}
+
+#idea-pool {
+    height: auto;
+    max-height: 12;
+    border: solid $primary;
+    padding: 0 1;
+}
+
+#agent-panels {
+    height: 1fr;
+    layout: horizontal;
+}
+
+#idea-agent-section {
+    width: 1fr;
+}
+
+#exp-agent-section {
+    width: 2fr;
+}
+
+.panel-title {
+    height: 1;
+    background: $primary-background;
+    color: $text;
+    padding: 0 1;
+}
+
+#worker-status {
+    height: auto;
+    max-height: 8;
+    border-bottom: solid $accent;
+    padding: 0 1;
+}
+
+#idea-log, #exp-log {
+    height: 1fr;
+    border: solid $primary;
+}
+
+#hotkey-bar {
+    dock: bottom;
+    height: 1;
+    background: $primary-background;
+    color: $text-muted;
+    padding: 0 1;
+}
+
+AddIdeaModal {
+    align: center middle;
+}
+
+AddIdeaModal > #dialog {
+    width: 60;
+    height: auto;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+GPUStatusModal {
+    align: center middle;
+}
+
+GPUStatusModal > #gpu-dialog {
+    width: 80;
+    height: auto;
+    max-height: 80%;
+    border: thick $primary;
+    background: $surface;
+    padding: 1 2;
+}
+
+LogScreen {
+    background: $surface;
+}
+
+LogScreen #log-content {
+    height: 1fr;
+    overflow-y: scroll;
+    padding: 0 1;
+}
+
+LogScreen #log-footer {
+    dock: bottom;
+    height: 1;
+    background: $primary-background;
+    padding: 0 1;
+}
