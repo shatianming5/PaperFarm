@@ -6,6 +6,9 @@ from typing import Callable
 from open_researcher.agents import register
 from open_researcher.agents.base import AgentAdapter
 
+_DEFAULT_MODEL = "gpt-5.3-codex"
+_DEFAULT_SANDBOX = "full-auto"
+
 
 @register
 class CodexAdapter(AgentAdapter):
@@ -13,7 +16,10 @@ class CodexAdapter(AgentAdapter):
     command = "codex"
 
     def build_command(self, program_md: Path, workdir: Path) -> list[str]:
-        return [self.command, "exec", "-m", "gpt-5.3-codex", "--full-auto", "-"]
+        model = self._config.get("model", _DEFAULT_MODEL)
+        sandbox = self._config.get("sandbox", _DEFAULT_SANDBOX)
+        extra = self._config.get("extra_flags", [])
+        return [self.command, "exec", "-m", model, f"--{sandbox}", *extra, "-"]
 
     def run(
         self,

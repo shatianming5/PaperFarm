@@ -13,7 +13,14 @@ class AiderAdapter(AgentAdapter):
     command = "aider"
 
     def build_command(self, program_md: Path, workdir: Path) -> list[str]:
-        return [self.command, "--yes-always", "--message-file", str(program_md)]
+        model = self._config.get("model", "")
+        extra = self._config.get("extra_flags", [])
+        cmd = [self.command, "--yes-always"]
+        if model:
+            cmd.extend(["--model", model])
+        cmd.extend(["--message-file", str(program_md)])
+        cmd.extend(extra)
+        return cmd
 
     def run(
         self,

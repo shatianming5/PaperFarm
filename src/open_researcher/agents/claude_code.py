@@ -6,14 +6,27 @@ from typing import Callable
 from open_researcher.agents import register
 from open_researcher.agents.base import AgentAdapter
 
+_DEFAULT_TOOLS = "Edit,Write,Bash,Read,Glob,Grep"
+
 
 @register
 class ClaudeCodeAdapter(AgentAdapter):
     name = "claude-code"
     command = "claude"
 
+    def _build_flags(self) -> list[str]:
+        """Build configurable flags from adapter config."""
+        tools = self._config.get("allowed_tools", _DEFAULT_TOOLS)
+        model = self._config.get("model", "")
+        extra = self._config.get("extra_flags", [])
+        flags = ["--allowedTools", tools]
+        if model:
+            flags.extend(["--model", model])
+        flags.extend(extra)
+        return flags
+
     def build_command(self, program_md: Path, workdir: Path) -> list[str]:
-        return [self.command, "-p", "<prompt>", "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep"]
+        return [self.command, "-p", str(program_md), *self._build_flags()]
 
     def run(
         self,
@@ -30,5 +43,5 @@ class ClaudeCodeAdapter(AgentAdapter):
             if on_output:
                 on_output(msg)
             return 1
-        cmd = [self.command, "-p", prompt, "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep"]
+        cmd = [self.command, "-p", prompt, *self._build_flags()]
         return self._run_process(cmd, workdir, on_output, env=env)

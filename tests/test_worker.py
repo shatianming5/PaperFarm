@@ -3,7 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.worker import WorkerManager

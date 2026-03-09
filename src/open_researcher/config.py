@@ -18,6 +18,7 @@ class ResearchConfig:
     web_search: bool = True
     search_interval: int = 5
     remote_hosts: list = field(default_factory=list)
+    agent_config: dict = field(default_factory=dict)
 
 
 def load_config(research_dir: Path) -> ResearchConfig:
@@ -44,4 +45,5 @@ def load_config(research_dir: Path) -> ResearchConfig:
         web_search=research.get("web_search", True),
         search_interval=research.get("search_interval", 5),
         remote_hosts=gpu.get("remote_hosts", []),
+        agent_config=raw.get("agents", {}),
     )

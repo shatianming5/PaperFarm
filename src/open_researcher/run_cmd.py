@@ -61,6 +61,7 @@ def _read_latest_status(research_dir: Path) -> str:
 def _set_paused(research_dir: Path, reason: str) -> None:
     """Set control.json paused=True with a reason."""
     from filelock import FileLock
+
     from open_researcher.storage import atomic_write_json
 
     ctrl_path = research_dir / "control.json"
@@ -209,15 +210,16 @@ def _make_safe_output(app_log_fn, log_path: Path):
     return on_output
 
 
-def _resolve_agent(agent_name: str | None):
-    """Resolve agent by name or auto-detect."""
+def _resolve_agent(agent_name: str | None, agent_configs: dict | None = None):
+    """Resolve agent by name or auto-detect, with per-agent config."""
+    configs = agent_configs or {}
     if agent_name:
         try:
-            return get_agent(agent_name)
+            return get_agent(agent_name, config=configs.get(agent_name))
         except KeyError as e:
             console.print(f"[red]Error:[/red] {e}")
             raise SystemExit(1)
-    agent = detect_agent()
+    agent = detect_agent(configs=configs)
     if agent is None:
         console.print(
             "[red]Error:[/red] No supported AI agent found.\n"
@@ -241,17 +243,16 @@ def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
         console.print("[red]Error:[/red] .research/program.md not found.")
         raise SystemExit(1)
 
-    agent = _resolve_agent(agent_name)
+    # Load config before agent resolution so agent_config is available
+    cfg = load_config(research)
+    agent = _resolve_agent(agent_name, cfg.agent_config)
 
     if dry_run:
         console.print(f"[bold]Agent:[/bold] {agent.name}")
-        console.print(f"[bold]Command:[/bold] {agent.name} -p <program.md>")
+        console.print(f"[bold]Command:[/bold] {' '.join(agent.build_command(program_md, repo_path))}")
         console.print(f"[bold]Working directory:[/bold] {repo_path}")
         console.print("\n[dim]Dry run -- no agent launched.[/dim]")
         return
-
-    # Load config for runtime controls
-    cfg = load_config(research)
     watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: agent.terminate())
 
     # Launch with Textual TUI
@@ -309,7 +310,8 @@ def _run_parallel_workers(
     idea_pool = IdeaPool(research / "idea_pool.json")
 
     def agent_factory():
-        return get_agent(exp_agent.name)
+        name = cfg.worker_agent or exp_agent.name
+        return get_agent(name, config=cfg.agent_config.get(name))
 
     wm = WorkerManager(
         repo_path=repo_path,
@@ -375,8 +377,10 @@ def do_run_multi(
             console.print(f"[red]Error:[/red] {p.name} not found. Re-run 'open-researcher init'.")
             raise SystemExit(1)
 
-    idea_agent = _resolve_agent(idea_agent_name)
-    exp_agent = _resolve_agent(exp_agent_name)
+    # Load config before agent resolution so agent_config is available
+    cfg = load_config(research)
+    idea_agent = _resolve_agent(idea_agent_name, cfg.agent_config)
+    exp_agent = _resolve_agent(exp_agent_name, cfg.agent_config)
 
     if dry_run:
         console.print(f"[bold]Idea Agent:[/bold] {idea_agent.name}")
@@ -388,9 +392,6 @@ def do_run_multi(
     # Ensure worktrees directory exists for parallel experiments
     worktrees_dir = research / "worktrees"
     worktrees_dir.mkdir(exist_ok=True)
-
-    # Load config for runtime controls
-    cfg = load_config(research)
     crash_counter = CrashCounter(cfg.max_crashes)
     phase_gate = PhaseGate(research, cfg.mode)
 

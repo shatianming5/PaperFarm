@@ -41,3 +41,19 @@ gpu:
   #   - host: "192.168.1.101"
   #     user: "researcher"
   remote_hosts: []
+
+# Agent configuration (optional — override defaults per agent)
+# agents:
+#   claude-code:
+#     model: ""                          # e.g., claude-sonnet-4-5-20250514
+#     allowed_tools: "Edit,Write,Bash,Read,Glob,Grep"
+#     extra_flags: []                    # e.g., ["--max-turns", "50"]
+#   codex:
+#     model: "gpt-5.3-codex"
+#     sandbox: "full-auto"               # full-auto | suggest | ask
+#     extra_flags: []
+#   aider:
+#     model: ""                          # uses aider default
+#     extra_flags: []                    # e.g., ["--no-git"]
+#   opencode:
+#     extra_flags: []

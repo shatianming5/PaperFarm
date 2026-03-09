@@ -1,7 +1,7 @@
 """Tests for config reader."""
 
-import yaml
 import pytest
+import yaml
 
 from open_researcher.config import ResearchConfig, load_config
 

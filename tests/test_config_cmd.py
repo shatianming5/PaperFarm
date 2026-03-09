@@ -1,7 +1,5 @@
 """Tests for the config CLI subcommand."""
 
-import json
-from pathlib import Path
 
 import pytest
 import yaml

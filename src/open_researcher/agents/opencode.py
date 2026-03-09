@@ -13,7 +13,8 @@ class OpencodeAdapter(AgentAdapter):
     command = "opencode"
 
     def build_command(self, program_md: Path, workdir: Path) -> list[str]:
-        return [self.command, "-p", "<prompt>"]
+        extra = self._config.get("extra_flags", [])
+        return [self.command, "-p", str(program_md), *extra]
 
     def run(
         self,
@@ -30,5 +31,6 @@ class OpencodeAdapter(AgentAdapter):
             if on_output:
                 on_output(msg)
             return 1
-        cmd = [self.command, "-p", prompt]
+        extra = self._config.get("extra_flags", [])
+        cmd = [self.command, "-p", prompt, *extra]
         return self._run_process(cmd, workdir, on_output, env=env)

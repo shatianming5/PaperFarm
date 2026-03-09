@@ -53,7 +53,11 @@ class GPUManager:
     def detect_local(self) -> list[dict]:
         try:
             result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu", "--format=csv"],
+                [
+                    "nvidia-smi",
+                    "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu",
+                    "--format=csv",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=10,

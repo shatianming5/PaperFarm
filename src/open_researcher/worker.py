@@ -1,5 +1,6 @@
 """Parallel worker manager -- run experiments across multiple GPUs."""
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable
@@ -7,6 +8,9 @@ from typing import Callable
 from open_researcher.activity import ActivityMonitor
 from open_researcher.gpu_manager import GPUManager
 from open_researcher.idea_pool import IdeaPool
+from open_researcher.worktree import create_worktree, remove_worktree
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerManager:
@@ -100,11 +104,21 @@ class WorkerManager:
             if gpu_env:
                 self.on_output(f"[{wid}] Using GPU env: {gpu_env}")
 
-            # Create agent and run in this worker's context
+            # Create isolated worktree for this experiment
+            wt_path = None
+            workdir = self.repo_path  # fallback if worktree creation fails
+            try:
+                wt_path = create_worktree(self.repo_path, f"{wid}-{idea['id']}")
+                workdir = wt_path
+                self.on_output(f"[{wid}] Worktree created: {wt_path.name}")
+            except Exception as exc:
+                self.on_output(f"[{wid}] Worktree creation failed ({exc}), running in main repo")
+
+            # Create agent and run in isolated worktree
             agent = self.agent_factory()
             try:
                 code = agent.run(
-                    self.repo_path,
+                    workdir,
                     on_output=self.on_output,
                     program_file="experiment_program.md",
                     env=gpu_env if gpu_env else None,
@@ -116,6 +130,14 @@ class WorkerManager:
             except Exception as exc:
                 self.on_output(f"[{wid}] Error: {exc}")
                 self.idea_pool.update_status(idea["id"], "skipped")
+            finally:
+                # Always clean up worktree
+                if wt_path is not None:
+                    try:
+                        remove_worktree(self.repo_path, wt_path)
+                        self.on_output(f"[{wid}] Worktree cleaned up")
+                    except Exception as exc:
+                        logger.debug("Worktree cleanup failed: %s", exc)
 
         self._activity.update_worker(
             "experiment_agent", wid, status="idle"

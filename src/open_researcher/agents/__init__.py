@@ -17,21 +17,22 @@ def list_agents() -> dict[str, type[AgentAdapter]]:
     return dict(_REGISTRY)
 
 
-def get_agent(name: str) -> AgentAdapter:
+def get_agent(name: str, config: dict | None = None) -> AgentAdapter:
     """Instantiate an agent adapter by name. Raises KeyError if unknown."""
     _ensure_loaded()
     if name not in _REGISTRY:
         raise KeyError(f"Unknown agent: {name!r}. Available: {', '.join(_REGISTRY)}")
-    return _REGISTRY[name]()
+    return _REGISTRY[name](config=config)
 
 
-def detect_agent() -> AgentAdapter | None:
+def detect_agent(configs: dict | None = None) -> AgentAdapter | None:
     """Auto-detect the first installed agent. Returns None if none found."""
     _ensure_loaded()
+    configs = configs or {}
     preference = ["claude-code", "codex", "aider", "opencode"]
     for agent_name in preference:
         if agent_name in _REGISTRY:
-            adapter = _REGISTRY[agent_name]()
+            adapter = _REGISTRY[agent_name](config=configs.get(agent_name))
             if adapter.check_installed():
                 return adapter
     return None

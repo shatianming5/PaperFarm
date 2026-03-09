@@ -1,8 +1,8 @@
 """Abstract base class for AI agent adapters."""
 
 import os
-import signal
 import shutil
+import signal
 import subprocess
 import threading
 from abc import ABC, abstractmethod
@@ -16,9 +16,10 @@ class AgentAdapter(ABC):
     name: str
     command: str
 
-    def __init__(self):
+    def __init__(self, config: dict | None = None):
         self._proc: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._config = config or {}
 
     def check_installed(self) -> bool:
         """Return True if the agent binary is available on PATH."""

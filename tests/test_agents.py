@@ -107,3 +107,66 @@ def test_check_installed_uses_shutil_which(monkeypatch):
     assert agent.check_installed() is True
     monkeypatch.setattr(shutil, "which", lambda x: None)
     assert agent.check_installed() is False
+
+
+# ---- Agent config tests ----
+
+
+def test_claude_code_config_custom_model():
+    from open_researcher.agents.claude_code import ClaudeCodeAdapter
+
+    agent = ClaudeCodeAdapter(config={"model": "claude-sonnet-4-5-20250514", "allowed_tools": "Bash,Read"})
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "--model" in cmd
+    assert "claude-sonnet-4-5-20250514" in cmd
+    assert "Bash,Read" in cmd
+
+
+def test_claude_code_config_extra_flags():
+    from open_researcher.agents.claude_code import ClaudeCodeAdapter
+
+    agent = ClaudeCodeAdapter(config={"extra_flags": ["--max-turns", "50"]})
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "--max-turns" in cmd
+    assert "50" in cmd
+
+
+def test_codex_config_custom_model():
+    from open_researcher.agents.codex import CodexAdapter
+
+    agent = CodexAdapter(config={"model": "gpt-5.2", "sandbox": "suggest"})
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "-m" in cmd
+    idx = cmd.index("-m")
+    assert cmd[idx + 1] == "gpt-5.2"
+    assert "--suggest" in cmd
+
+
+def test_codex_default_model():
+    from open_researcher.agents.codex import CodexAdapter
+
+    agent = CodexAdapter()
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "gpt-5.3-codex" in cmd
+    assert "--full-auto" in cmd
+
+
+def test_aider_config_model():
+    from open_researcher.agents.aider import AiderAdapter
+
+    agent = AiderAdapter(config={"model": "gpt-4o"})
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "--model" in cmd
+    assert "gpt-4o" in cmd
+
+
+def test_get_agent_with_config():
+    agent = get_agent("claude-code", config={"model": "test-model"})
+    assert agent._config.get("model") == "test-model"
+
+
+def test_detect_agent_with_configs(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda x: "/usr/bin/claude" if x == "claude" else None)
+    agent = detect_agent(configs={"claude-code": {"model": "custom-model"}})
+    assert agent is not None
+    assert agent._config.get("model") == "custom-model"

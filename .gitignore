@@ -16,3 +16,22 @@ htmlcov/
 .coverage
 *.log
 .DS_Store
+
+# Research runtime data (created by `open-researcher init`)
+.research/
+
+# Demo workspace
+_demo_workspace/
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Analysis reports (generated, not source)
+analysis/

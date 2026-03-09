@@ -325,7 +325,8 @@ class DocViewer(Static):
         self.research_dir = research_dir
 
     def compose(self) -> ComposeResult:
-        from textual.widgets import Markdown as MarkdownWidget, Select
+        from textual.widgets import Markdown as MarkdownWidget
+        from textual.widgets import Select
 
         options = [(f, f) for f in self.DOC_FILES]
         yield Select(options, value=self.DOC_FILES[0], id="doc-select")
