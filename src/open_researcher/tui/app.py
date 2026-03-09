@@ -48,7 +48,7 @@ class ResearchApp(App):
         ("q", "quit_app", "Quit"),
     ]
 
-    def __init__(self, repo_path: Path, multi: bool = False, on_ready=None):
+    def __init__(self, repo_path: Path, multi: bool = False, on_ready=None, initial_phase: str = "experimenting"):
         super().__init__()
         self.repo_path = repo_path
         self.research_dir = repo_path / ".research"
@@ -56,6 +56,7 @@ class ResearchApp(App):
         self.pool = IdeaPool(self.research_dir / "idea_pool.json")
         self.activity = ActivityMonitor(self.research_dir)
         self._on_ready = on_ready
+        self.app_phase = initial_phase  # "scouting" | "reviewing" | "experimenting"
 
     def compose(self) -> ComposeResult:
         yield StatsBar(id="stats-bar")
