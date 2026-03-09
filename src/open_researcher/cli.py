@@ -102,5 +102,26 @@ def run(
         do_run(repo_path=Path.cwd(), agent_name=agent, dry_run=dry_run)
 
 
+@app.command()
+def start(
+    agent: str = typer.Option(None, help="Agent to use (claude-code, codex, aider, opencode)."),
+    tag: str = typer.Option(None, help="Experiment tag (e.g. mar10). Defaults to today's date."),
+    multi: bool = typer.Option(False, "--multi", help="Enable dual-agent mode (Idea + Experiment)."),
+    idea_agent: str = typer.Option(None, "--idea-agent", help="Agent for idea generation (multi mode)."),
+    exp_agent: str = typer.Option(None, "--exp-agent", help="Agent for experiments (multi mode)."),
+):
+    """Zero-config start: auto-init, analyze repo, confirm plan, then run experiments."""
+    from open_researcher.start_cmd import do_start
+
+    do_start(
+        repo_path=Path.cwd(),
+        agent_name=agent,
+        tag=tag,
+        multi=multi,
+        idea_agent_name=idea_agent,
+        exp_agent_name=exp_agent,
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -66,3 +66,17 @@ def test_run_dry_run():
             result = runner.invoke(app, ["run", "--dry-run"])
             assert result.exit_code == 0
             assert "mock-agent" in result.stdout
+
+
+def test_start_without_git():
+    """start should fail without git repo."""
+    with runner.isolated_filesystem():
+        result = runner.invoke(app, ["start"])
+        assert result.exit_code == 1
+
+
+def test_start_help():
+    """start --help should show the command."""
+    result = runner.invoke(app, ["start", "--help"])
+    assert result.exit_code == 0
+    assert "start" in result.stdout.lower() or "Start" in result.stdout
