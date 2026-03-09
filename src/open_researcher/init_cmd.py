@@ -51,6 +51,8 @@ def do_init(repo_path: Path, tag: str | None = None) -> None:
         ("ideas.md.j2", "ideas.md"),
         ("idea_program.md.j2", "idea_program.md"),
         ("experiment_program.md.j2", "experiment_program.md"),
+        ("scout_program.md.j2", "scout_program.md"),
+        ("research-strategy.md.j2", "research-strategy.md"),
     ]:
         template = env.get_template(template_name)
         content = template.render(context)
