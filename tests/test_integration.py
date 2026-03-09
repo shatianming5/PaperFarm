@@ -103,6 +103,7 @@ def test_multi_agent_init_creates_all_files(tmp_path):
 
     from open_researcher.init_cmd import do_init
 
+    (tmp_path / ".git").mkdir()
     do_init(repo_path=tmp_path, tag="test")
     research = tmp_path / ".research"
 

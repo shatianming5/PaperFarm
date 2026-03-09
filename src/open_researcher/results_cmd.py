@@ -1,6 +1,7 @@
 """Implementation of the 'results' command."""
 
 import csv
+import json as json_mod
 import sys
 from pathlib import Path
 
@@ -12,7 +13,8 @@ def load_results(repo_path: Path) -> list[dict]:
     results_path = repo_path / ".research" / "results.tsv"
     if not results_path.exists():
         return []
-    return list(csv.DictReader(results_path.open(), delimiter="\t"))
+    with results_path.open() as f:
+        return list(csv.DictReader(f, delimiter="\t"))
 
 
 def print_results(repo_path: Path) -> None:
@@ -39,16 +41,86 @@ def print_results(repo_path: Path) -> None:
     status_styles = {"keep": "green", "discard": "yellow", "crash": "red"}
 
     for i, row in enumerate(rows, 1):
-        style = status_styles.get(row["status"], "")
+        status = row.get("status", "<missing>")
+        style = status_styles.get(status, "")
+        timestamp = row.get("timestamp", "<missing>")
         table.add_row(
             str(i),
-            row["status"],
-            row["primary_metric"],
-            row["metric_value"],
-            row["commit"],
-            row["description"],
-            row["timestamp"][:19],
+            status,
+            row.get("primary_metric", "<missing>"),
+            row.get("metric_value", "<missing>"),
+            row.get("commit", "<missing>"),
+            row.get("description", "<missing>"),
+            timestamp[:19] if len(timestamp) >= 19 else timestamp,
             style=style,
         )
 
     console.print(table)
+
+
+def print_results_chart(repo_path: Path, metric: str | None = None, last: int | None = None) -> None:
+    """Draw a terminal chart showing primary metric over experiment iterations."""
+    import plotext as plt
+
+    rows = load_results(repo_path)
+    if not rows:
+        print("No results to chart.")
+        return
+    if last:
+        rows = rows[-last:]
+
+    # Read config for metric info
+    config_path = repo_path / ".research" / "config.yaml"
+    try:
+        import yaml
+
+        cfg = yaml.safe_load(config_path.read_text()) or {}
+        primary = cfg.get("metrics", {}).get("primary", {})
+        metric_name = metric or primary.get("name", "metric")
+        direction = primary.get("direction", "")
+    except (OSError, Exception):
+        metric_name = metric or "metric"
+        direction = ""
+
+    values = []
+    statuses = []
+    for r in rows:
+        try:
+            values.append(float(r.get("metric_value", 0)))
+        except (ValueError, TypeError):
+            values.append(0)
+        statuses.append(r.get("status", ""))
+
+    x = list(range(1, len(values) + 1))
+
+    plt.clear_figure()
+    plt.plot(x, values, marker="braille")
+
+    # Colored scatter points by status
+    for status, color in [("keep", "green"), ("discard", "red"), ("crash", "yellow")]:
+        sx = [x[i] for i, s in enumerate(statuses) if s == status]
+        sy = [values[i] for i, s in enumerate(statuses) if s == status]
+        if sx:
+            plt.scatter(sx, sy, color=color)
+
+    # Reference lines
+    if values:
+        plt.hline(values[0], color="blue")  # baseline
+        if direction == "higher_is_better":
+            best = max(values)
+        elif direction == "lower_is_better":
+            best = min(values)
+        else:
+            best = max(values)
+        plt.hline(best, color="cyan")
+
+    plt.title(f"{metric_name} over experiments")
+    plt.xlabel("Experiment #")
+    plt.ylabel(metric_name)
+    plt.show()
+
+
+def print_results_json(repo_path: Path) -> None:
+    """Output experiment results as JSON."""
+    rows = load_results(repo_path)
+    print(json_mod.dumps(rows, indent=2))

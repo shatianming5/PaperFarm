@@ -152,3 +152,65 @@ def test_status_shows_activity(tmp_path):
     state = parse_research_state(tmp_path)
     assert state is not None
     assert state["total"] == 0
+
+
+def test_parse_state_with_corrupt_metric(tmp_path):
+    """Should not crash on non-numeric metric values."""
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "config.yaml").write_text(
+        "mode: autonomous\nmetrics:\n  primary:\n    name: acc\n    direction: higher_is_better\n"
+    )
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+        "2026-03-08T10:00:00\ta1b2c3d\tacc\tNaN\t{}\tkeep\tbaseline\n"
+        "2026-03-08T11:00:00\tb2c3d4e\tacc\tcorrupt\t{}\tkeep\texp1\n"
+    )
+    state = parse_research_state(tmp_path)
+    assert state["total"] == 2  # Should not crash
+    # NaN and "corrupt" should both be filtered out of metric values
+    assert state["baseline_value"] is None
+    assert state["current_value"] is None
+    assert state["best_value"] is None
+
+
+def test_print_status_with_corrupt_metrics(tmp_path):
+    """print_status should not crash on non-numeric metric values."""
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "config.yaml").write_text(
+        "mode: autonomous\nmetrics:\n  primary:\n    name: acc\n    direction: higher_is_better\n"
+    )
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+        "2026-03-08T10:00:00\ta1b2c3d\tacc\tNaN\t{}\tkeep\tbaseline\n"
+        "2026-03-08T11:00:00\tb2c3d4e\tacc\tcorrupt\t{}\tkeep\texp1\n"
+    )
+    for name in ["project-understanding.md", "literature.md", "evaluation.md"]:
+        (research / name).write_text("# placeholder\nReal content here.\n")
+    # Should not crash
+    print_status(tmp_path)
+
+
+def test_sparkline_generation():
+    from open_researcher.status_cmd import _sparkline
+
+    result = _sparkline([1.0, 2.0, 3.0, 4.0])
+    assert len(result) == 4
+    # Should be ascending
+    assert result[0] < result[-1] or result == "\u2585\u2585\u2585\u2585"  # handle edge case
+
+
+def test_sparkline_empty():
+    from open_researcher.status_cmd import _sparkline
+
+    assert _sparkline([]) == ""
+
+
+def test_sparkline_constant():
+    from open_researcher.status_cmd import _sparkline
+
+    result = _sparkline([5.0, 5.0, 5.0])
+    assert len(result) == 3
+    # All same value -> all same char
+    assert result[0] == result[1] == result[2]

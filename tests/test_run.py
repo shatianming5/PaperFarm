@@ -126,6 +126,117 @@ def test_run_multi_dry_run_shows_agents(capsys):
         assert "Experiment Agent" in captured.out
 
 
+def test_multi_alternating_idea_then_experiment():
+    """Verify alternating flow: idea(1 idea) → experiment → idea(no more) → stop."""
+    import json
+    import time
+
+    from open_researcher.run_cmd import do_run_multi
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        research = repo / ".research"
+        research.mkdir()
+        (research / "idea_program.md").write_text("Idea instructions")
+        (research / "experiment_program.md").write_text("Experiment instructions")
+        (research / "worktrees").mkdir()
+        (research / "idea_pool.json").write_text(json.dumps({"ideas": []}, indent=2))
+
+        call_order = []
+        idea_call_count = {"n": 0}
+
+        mock_idea = MagicMock()
+        mock_idea.name = "idea-agent"
+
+        def idea_run(workdir, on_output=None, program_file="program.md"):
+            idea_call_count["n"] += 1
+            call_order.append("idea")
+            if idea_call_count["n"] == 1:
+                # First call: generate 1 idea
+                pool_path = workdir / ".research" / "idea_pool.json"
+                pool_data = {"ideas": [
+                    {"id": "idea-001", "description": "Test idea", "status": "pending", "priority": 1},
+                ]}
+                pool_path.write_text(json.dumps(pool_data))
+            # Second call: don't add anything → no pending ideas → loop stops
+            return 0
+
+        mock_idea.run.side_effect = idea_run
+
+        mock_exp = MagicMock()
+        mock_exp.name = "exp-agent"
+
+        def exp_run(workdir, on_output=None, program_file="program.md"):
+            call_order.append("exp")
+            pool_path = workdir / ".research" / "idea_pool.json"
+            pool_data = json.loads(pool_path.read_text())
+            for idea in pool_data["ideas"]:
+                if idea["status"] == "pending":
+                    idea["status"] = "done"
+            pool_path.write_text(json.dumps(pool_data))
+            return 0
+
+        mock_exp.run.side_effect = exp_run
+
+        mock_app = MagicMock()
+
+        def mock_app_factory(*args, **kwargs):
+            on_ready = kwargs.get("on_ready")
+
+            def run_side_effect():
+                if on_ready:
+                    on_ready()
+                time.sleep(0.5)
+
+            mock_app.run.side_effect = run_side_effect
+            mock_app.append_log = lambda line: None
+            return mock_app
+
+        with (
+            patch("open_researcher.run_cmd.get_agent", side_effect=[mock_idea, mock_exp]),
+            patch("open_researcher.tui.app.ResearchApp", mock_app_factory),
+            patch("open_researcher.status_cmd.print_status", return_value=None),
+        ):
+            do_run_multi(repo, idea_agent_name="idea-agent", exp_agent_name="exp-agent", dry_run=False)
+
+        # Cycle 1: idea → exp, Cycle 2: idea (no new pending) → stop
+        assert call_order == ["idea", "exp", "idea"]
+        assert mock_idea.run.call_count == 2
+        assert mock_exp.run.call_count == 1
+
+
+def test_make_safe_output_filters_prompt_on_agent_restart(tmp_path):
+    """Prompt echo is filtered even when agent restarts (prompt_done resets)."""
+    from open_researcher.run_cmd import _make_safe_output
+
+    captured = []
+    log_file = tmp_path / "test.log"
+    cb = _make_safe_output(captured.append, log_file)
+
+    # First agent session
+    cb("user")
+    cb("this is the prompt text that should be hidden")
+    cb("thinking")
+    cb("agent thought 1")
+    cb("assistant")
+    cb("agent response 1")
+
+    # Second agent session (restart)
+    cb("user")
+    cb("this is the second prompt that should also be hidden")
+    cb("thinking")
+    cb("agent thought 2")
+
+    # First prompt content should NOT appear in captured
+    assert not any("prompt text that should be hidden" in line for line in captured)
+    # Second prompt content should also NOT appear
+    assert not any("second prompt that should also be hidden" in line for line in captured)
+    # But actual agent content should appear
+    assert any("agent thought 1" in line for line in captured)
+    assert any("agent response 1" in line for line in captured)
+    assert any("agent thought 2" in line for line in captured)
+
+
 def test_make_safe_output_colors_diff_lines(tmp_path):
     from open_researcher.run_cmd import _make_safe_output
 

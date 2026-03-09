@@ -79,8 +79,18 @@ def test_init_generates_default_tag():
         assert "research/" in program
 
 
+def test_init_fails_without_git_directory(tmp_path):
+    """init should fail if .git directory does not exist."""
+    with pytest.raises(SystemExit):
+        do_init(repo_path=tmp_path, tag="test-nogit")
+    # .research should NOT have been created
+    assert not (tmp_path / ".research").exists()
+
+
 def test_init_creates_shared_files(tmp_path):
     """Verify init creates idea_pool.json, activity.json, control.json."""
+    # Need .git for the new validation
+    (tmp_path / ".git").mkdir()
     do_init(repo_path=tmp_path, tag="test")
     research = tmp_path / ".research"
 

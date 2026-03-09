@@ -13,6 +13,11 @@ from jinja2 import Environment, PackageLoader
 
 def do_init(repo_path: Path, tag: str | None = None) -> None:
     """Initialize .research/ directory in the given repo."""
+    git_dir = repo_path / ".git"
+    if not git_dir.exists():
+        print("[ERROR] Not a git repository. Run 'git init' first.", file=sys.stderr)
+        raise SystemExit(1)
+
     research_dir = repo_path / ".research"
 
     if research_dir.exists():

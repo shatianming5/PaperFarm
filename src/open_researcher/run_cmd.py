@@ -7,6 +7,10 @@ from pathlib import Path
 from rich.console import Console
 
 from open_researcher.agents import detect_agent, get_agent
+from open_researcher.config import load_config
+from open_researcher.crash_counter import CrashCounter
+from open_researcher.phase_gate import PhaseGate
+from open_researcher.watchdog import TimeoutWatchdog
 
 console = Console()
 
@@ -36,16 +40,41 @@ def _launch_agent_thread(
     return t
 
 
-def _has_pending_ideas(research_dir: Path) -> bool:
-    """Check if idea_pool.json has any pending ideas."""
-    pool_path = research_dir / "idea_pool.json"
-    if not pool_path.exists():
-        return False
+def _read_latest_status(research_dir: Path) -> str:
+    """Read the latest status from results.tsv (last non-header line)."""
+    results_path = research_dir / "results.tsv"
+    if not results_path.exists():
+        return ""
     try:
-        data = json.loads(pool_path.read_text())
-        return any(i["status"] == "pending" for i in data.get("ideas", []))
-    except (json.JSONDecodeError, OSError):
-        return False
+        lines = results_path.read_text().strip().splitlines()
+        if len(lines) < 2:
+            return ""
+        # TSV columns: timestamp, commit, primary_metric, metric_value, secondary_metrics, status, description
+        parts = lines[-1].split("\t")
+        if len(parts) >= 6:
+            return parts[5].strip()
+        return ""
+    except OSError:
+        return ""
+
+
+def _set_paused(research_dir: Path, reason: str) -> None:
+    """Set control.json paused=True with a reason."""
+    ctrl_path = research_dir / "control.json"
+    try:
+        ctrl = json.loads(ctrl_path.read_text())
+    except (json.JSONDecodeError, OSError, FileNotFoundError):
+        ctrl = {}
+    ctrl["paused"] = True
+    ctrl["pause_reason"] = reason
+    ctrl_path.write_text(json.dumps(ctrl, indent=2))
+
+
+def _has_pending_ideas(research_dir: Path) -> bool:
+    """Check if idea_pool.json has any pending ideas (thread-safe)."""
+    from open_researcher.idea_pool import IdeaPool
+    pool = IdeaPool(research_dir / "idea_pool.json")
+    return pool.summary().get("pending", 0) > 0
 
 
 
@@ -91,14 +120,20 @@ def _classify_line(line: str, phase: str) -> str:
 def _make_safe_output(app_log_fn, log_path: Path):
     """Create output callback with log coloring and phase separators."""
     state = {"filtering": False, "prompt_done": False, "phase": "acting"}
+    # Keep log file open for efficient per-line writes
+    try:
+        log_file = open(log_path, "a")  # noqa: SIM115
+    except OSError:
+        log_file = None
 
     def on_output(line: str):
         # 1. Always write raw line to log file
-        try:
-            with open(log_path, "a") as f:
-                f.write(line + "\n")
-        except OSError:
-            pass
+        if log_file:
+            try:
+                log_file.write(line + "\n")
+                log_file.flush()
+            except OSError:
+                pass
 
         # 2. Filter prompt echo
         stripped = line.strip()
@@ -141,7 +176,12 @@ def _make_safe_output(app_log_fn, log_path: Path):
             except Exception:
                 pass
             return
-        if stripped in ("user", ""):
+        if stripped == "user":
+            # New agent session starting — re-enter prompt filtering
+            state["filtering"] = True
+            state["prompt_done"] = False
+            return
+        if stripped == "":
             return
 
         # 4. Classify and color the line
@@ -195,26 +235,26 @@ def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
         console.print("\n[dim]Dry run -- no agent launched.[/dim]")
         return
 
+    # Load config for runtime controls
+    cfg = load_config(research)
+    watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: agent.terminate())
+
     # Launch with Textual TUI
     from open_researcher.tui.app import ResearchApp
 
     done = threading.Event()
     exit_codes: dict[str, int] = {}
 
-    on_output = _make_safe_output(
-        lambda line: None,  # placeholder, replaced after app creation
-        research / "run.log",
-    )
-
     def start_threads():
-        nonlocal on_output
         on_output = _make_safe_output(app.append_exp_log, research / "run.log")
+        watchdog.start()
         _launch_agent_thread(agent, repo_path, on_output, done, exit_codes, "agent")
 
     app = ResearchApp(repo_path, multi=False, on_ready=start_threads)
     app.run()
 
-    # Cleanup: terminate agent subprocess when TUI exits
+    # Cleanup: stop watchdog and terminate agent subprocess when TUI exits
+    watchdog.stop()
     agent.terminate()
 
     code = exit_codes.get("agent", -1)
@@ -226,6 +266,72 @@ def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
     from open_researcher.status_cmd import print_status
 
     print_status(repo_path)
+
+
+def _run_parallel_workers(
+    repo_path: Path,
+    research: Path,
+    cfg,
+    exp_agent,
+    idea_agent,
+    on_output,
+    stop: threading.Event,
+    exit_codes: dict,
+    watchdog,
+) -> None:
+    """Launch parallel experiment workers via WorkerManager."""
+    from open_researcher.gpu_manager import GPUManager
+    from open_researcher.idea_pool import IdeaPool
+    from open_researcher.worker import WorkerManager
+
+    gpu_manager = GPUManager(research / "gpu_status.json", cfg.remote_hosts)
+    idea_pool = IdeaPool(research / "idea_pool.json")
+
+    def agent_factory():
+        return exp_agent
+
+    wm = WorkerManager(
+        repo_path=repo_path,
+        research_dir=research,
+        gpu_manager=gpu_manager,
+        idea_pool=idea_pool,
+        agent_factory=agent_factory,
+        max_workers=cfg.max_workers,
+        on_output=on_output,
+    )
+
+    def _parallel_loop():
+        cycle = 0
+        while not stop.is_set():
+            cycle += 1
+            on_output(f"[system] === Cycle {cycle}: Starting Idea Agent ===")
+            try:
+                code = idea_agent.run(
+                    repo_path, on_output=on_output, program_file="idea_program.md"
+                )
+            except Exception as exc:
+                on_output(f"[idea] Agent error: {exc}")
+                code = 1
+            exit_codes["idea"] = code
+
+            if not _has_pending_ideas(research):
+                on_output("[system] No pending ideas after idea agent. Stopping.")
+                break
+
+            on_output(f"[system] Launching {cfg.max_workers} parallel workers...")
+            watchdog.reset()
+            wm.start()
+            wm.join()
+            watchdog.stop()
+
+            if not _has_pending_ideas(research):
+                on_output("[system] All ideas processed.")
+                break
+
+        on_output("[system] Parallel execution finished.")
+
+    t = threading.Thread(target=_parallel_loop, daemon=True)
+    t.start()
 
 
 def do_run_multi(
@@ -262,52 +368,95 @@ def do_run_multi(
     worktrees_dir = research / "worktrees"
     worktrees_dir.mkdir(exist_ok=True)
 
+    # Load config for runtime controls
+    cfg = load_config(research)
+    crash_counter = CrashCounter(cfg.max_crashes)
+    phase_gate = PhaseGate(research, cfg.mode)
+
     # Launch with Textual TUI
     from open_researcher.tui.app import ResearchApp
 
-    done_idea = threading.Event()
-    done_exp = threading.Event()
-    stop_exp = threading.Event()
+    stop = threading.Event()
     exit_codes: dict[str, int] = {}
 
     def start_threads():
         on_output = _make_safe_output(app.append_log, research / "run.log")
 
-        def _sequential():
-            # Phase 1: Run idea agent first
-            on_output("[system] Starting Idea Agent...")
-            try:
-                code = idea_agent.run(
-                    repo_path, on_output=on_output, program_file="idea_program.md"
-                )
-            except Exception as exc:
-                on_output(f"[idea] Agent error: {exc}")
-                code = 1
-            exit_codes["idea"] = code
-            done_idea.set()
-            on_output(f"[system] Idea Agent finished (code={code}). Starting Experiment Agent...")
+        # Watchdog resets each cycle — terminates experiment agent on timeout
+        watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: exp_agent.terminate())
 
-            # Phase 2: Run experiment agent (with restart loop)
-            run_count = 0
-            while not stop_exp.is_set():
-                run_count += 1
-                on_output(f"[exp] Starting experiment agent (run #{run_count})...")
+        # Check if parallel workers should be used
+        if cfg.max_workers > 1:
+            _run_parallel_workers(
+                repo_path, research, cfg, exp_agent, idea_agent,
+                on_output, stop, exit_codes, watchdog,
+            )
+            return
+
+        def _alternating():
+            """Alternate: idea agent generates 1 idea → experiment agent runs it → repeat."""
+            cycle = 0
+            while not stop.is_set():
+                cycle += 1
+
+                # --- Idea Agent: generate 1 idea ---
+                on_output(f"[system] === Cycle {cycle}: Starting Idea Agent ===")
                 try:
-                    code = exp_agent.run(
-                        repo_path, on_output=on_output, program_file="experiment_program.md"
+                    code = idea_agent.run(
+                        repo_path, on_output=on_output, program_file="idea_program.md"
                     )
                 except Exception as exc:
-                    on_output(f"[exp] Agent error: {exc}")
+                    on_output(f"[idea] Agent error: {exc}")
                     code = 1
-                exit_codes["exp"] = code
+                exit_codes["idea"] = code
 
                 if not _has_pending_ideas(research):
-                    on_output("[exp] No more pending ideas. Done.")
+                    on_output("[system] Idea Agent finished but no pending ideas. Stopping.")
                     break
-                on_output("[exp] More pending ideas found, restarting...")
-            done_exp.set()
 
-        t = threading.Thread(target=_sequential, daemon=True)
+                on_output(f"[system] Idea Agent done (code={code}). Starting Experiment Agent...")
+
+                # --- Experiment Agent: run pending ideas ---
+                exp_run = 0
+                while not stop.is_set():
+                    exp_run += 1
+                    on_output(f"[exp] Starting experiment agent (run #{exp_run})...")
+                    watchdog.reset()
+                    try:
+                        code = exp_agent.run(
+                            repo_path, on_output=on_output, program_file="experiment_program.md"
+                        )
+                    except Exception as exc:
+                        on_output(f"[exp] Agent error: {exc}")
+                        code = 1
+                    watchdog.stop()
+                    exit_codes["exp"] = code
+
+                    # --- Runtime controls: crash counter & phase gate ---
+                    status = _read_latest_status(research)
+                    if status and crash_counter.record(status):
+                        on_output(f"[system] Crash limit reached ({cfg.max_crashes} consecutive crashes). Pausing.")
+                        _set_paused(research, f"Crash limit reached: {cfg.max_crashes} consecutive crashes")
+                        stop.set()
+                        break
+
+                    phase = phase_gate.check()
+                    if phase:
+                        on_output(f"[system] Phase transition to '{phase}' — pausing for review.")
+
+                    if not _has_pending_ideas(research):
+                        on_output("[exp] No more pending ideas.")
+                        break
+                    on_output("[exp] Pending ideas remain, restarting...")
+
+                if stop.is_set():
+                    break
+                on_output(f"[system] Cycle {cycle} complete. Starting next idea generation...")
+
+            watchdog.stop()
+            on_output("[system] All cycles finished.")
+
+        t = threading.Thread(target=_alternating, daemon=True)
         t.start()
 
     app = ResearchApp(repo_path, multi=True, on_ready=start_threads)
@@ -316,7 +465,7 @@ def do_run_multi(
     # Cleanup: terminate agent subprocesses when TUI exits
     idea_agent.terminate()
     exp_agent.terminate()
-    stop_exp.set()  # Signal experiment thread to stop when TUI exits
+    stop.set()  # Signal alternating thread to stop when TUI exits
 
     for key, name in [("idea", "Idea Agent"), ("exp", "Experiment Agent")]:
         code = exit_codes.get(key, -1)
