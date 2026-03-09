@@ -1,8 +1,10 @@
 """Abstract base class for AI agent adapters."""
 
 import os
+import signal
 import shutil
 import subprocess
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
@@ -16,6 +18,7 @@ class AgentAdapter(ABC):
 
     def __init__(self):
         self._proc: subprocess.Popen | None = None
+        self._lock = threading.Lock()
 
     def check_installed(self) -> bool:
         """Return True if the agent binary is available on PATH."""
@@ -31,6 +34,7 @@ class AgentAdapter(ABC):
         workdir: Path,
         on_output: Callable[[str], None] | None = None,
         program_file: str = "program.md",
+        env: dict[str, str] | None = None,
     ) -> int:
         """Launch the agent, stream output via callback, return exit code."""
 
@@ -40,8 +44,12 @@ class AgentAdapter(ABC):
         workdir: Path,
         on_output: Callable[[str], None] | None = None,
         stdin_text: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> int:
         """Common subprocess execution with streaming output."""
+        run_env = None
+        if env:
+            run_env = {**os.environ, **env}
         proc = subprocess.Popen(
             cmd,
             cwd=str(workdir),
@@ -51,20 +59,39 @@ class AgentAdapter(ABC):
             text=True,
             bufsize=1,
             start_new_session=True,
+            env=run_env,
         )
         if stdin_text:
-            proc.stdin.write(stdin_text)
-            proc.stdin.close()
-        self._proc = proc
-        for line in proc.stdout:
-            if on_output:
-                on_output(line.rstrip("\n"))
-        return proc.wait()
+            try:
+                proc.stdin.write(stdin_text)
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+        with self._lock:
+            self._proc = proc
+        try:
+            for line in proc.stdout:
+                if on_output:
+                    on_output(line.rstrip("\n"))
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            proc.wait()
+        return proc.returncode
 
     def terminate(self) -> None:
         """Terminate the running agent subprocess."""
-        if self._proc and self._proc.poll() is None:
+        with self._lock:
+            proc = self._proc
+        if proc and proc.poll() is None:
             try:
-                os.killpg(os.getpgid(self._proc.pid), 15)
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             except (OSError, ProcessLookupError):
                 pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass

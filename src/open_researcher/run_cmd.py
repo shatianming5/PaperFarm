@@ -60,14 +60,19 @@ def _read_latest_status(research_dir: Path) -> str:
 
 def _set_paused(research_dir: Path, reason: str) -> None:
     """Set control.json paused=True with a reason."""
+    from filelock import FileLock
+    from open_researcher.storage import atomic_write_json
+
     ctrl_path = research_dir / "control.json"
-    try:
-        ctrl = json.loads(ctrl_path.read_text())
-    except (json.JSONDecodeError, OSError, FileNotFoundError):
-        ctrl = {}
-    ctrl["paused"] = True
-    ctrl["pause_reason"] = reason
-    ctrl_path.write_text(json.dumps(ctrl, indent=2))
+    lock = FileLock(str(ctrl_path) + ".lock")
+    with lock:
+        try:
+            ctrl = json.loads(ctrl_path.read_text())
+        except (json.JSONDecodeError, OSError, FileNotFoundError):
+            ctrl = {}
+        ctrl["paused"] = True
+        ctrl["pause_reason"] = reason
+        atomic_write_json(ctrl_path, ctrl)
 
 
 def _has_pending_ideas(research_dir: Path) -> bool:
@@ -120,6 +125,7 @@ def _classify_line(line: str, phase: str) -> str:
 def _make_safe_output(app_log_fn, log_path: Path):
     """Create output callback with log coloring and phase separators."""
     state = {"filtering": False, "prompt_done": False, "phase": "acting"}
+    lock = threading.Lock()
     # Keep log file open for efficient per-line writes
     try:
         log_file = open(log_path, "a")  # noqa: SIM115
@@ -127,69 +133,78 @@ def _make_safe_output(app_log_fn, log_path: Path):
         log_file = None
 
     def on_output(line: str):
-        # 1. Always write raw line to log file
+        with lock:
+            # 1. Always write raw line to log file
+            if log_file:
+                try:
+                    log_file.write(line + "\n")
+                    log_file.flush()
+                except OSError:
+                    pass
+
+            # 2. Filter prompt echo
+            stripped = line.strip()
+            if not state["prompt_done"]:
+                if stripped == "user":
+                    state["filtering"] = True
+                    return
+                if state["filtering"] and stripped in ("thinking", "assistant"):
+                    state["filtering"] = False
+                    state["prompt_done"] = True
+                    # Show phase separator
+                    if stripped == "thinking":
+                        state["phase"] = "thinking"
+                        try:
+                            app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
+                        except Exception:
+                            pass
+                    else:
+                        state["phase"] = "acting"
+                        try:
+                            app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
+                        except Exception:
+                            pass
+                    return
+                if state["filtering"]:
+                    return
+
+            # 3. Phase transitions (after prompt is done)
+            if stripped == "thinking":
+                state["phase"] = "thinking"
+                try:
+                    app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
+                except Exception:
+                    pass
+                return
+            if stripped == "assistant":
+                state["phase"] = "acting"
+                try:
+                    app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
+                except Exception:
+                    pass
+                return
+            if stripped == "user":
+                # New agent session starting — re-enter prompt filtering
+                state["filtering"] = True
+                state["prompt_done"] = False
+                return
+            if stripped == "":
+                return
+
+            # 4. Classify and color the line
+            colored = _classify_line(line, state["phase"])
+            try:
+                app_log_fn(colored)
+            except Exception:
+                pass
+
+    def _close():
         if log_file:
             try:
-                log_file.write(line + "\n")
-                log_file.flush()
+                log_file.close()
             except OSError:
                 pass
-
-        # 2. Filter prompt echo
-        stripped = line.strip()
-        if not state["prompt_done"]:
-            if stripped == "user":
-                state["filtering"] = True
-                return
-            if state["filtering"] and stripped in ("thinking", "assistant"):
-                state["filtering"] = False
-                state["prompt_done"] = True
-                # Show phase separator
-                if stripped == "thinking":
-                    state["phase"] = "thinking"
-                    try:
-                        app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
-                    except Exception:
-                        pass
-                else:
-                    state["phase"] = "acting"
-                    try:
-                        app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
-                    except Exception:
-                        pass
-                return
-            if state["filtering"]:
-                return
-
-        # 3. Phase transitions (after prompt is done)
-        if stripped == "thinking":
-            state["phase"] = "thinking"
-            try:
-                app_log_fn("[dim]───── 💭 Thinking ─────[/dim]")
-            except Exception:
-                pass
-            return
-        if stripped == "assistant":
-            state["phase"] = "acting"
-            try:
-                app_log_fn("[bold]───── ✦ Acting ─────[/bold]")
-            except Exception:
-                pass
-            return
-        if stripped == "user":
-            # New agent session starting — re-enter prompt filtering
-            state["filtering"] = True
-            state["prompt_done"] = False
-            return
-        if stripped == "":
-            return
-
-        # 4. Classify and color the line
-        colored = _classify_line(line, state["phase"])
-        try:
-            app_log_fn(colored)
-        except Exception:
-            pass
+    on_output.close = _close
 
     return on_output
 
@@ -244,14 +259,20 @@ def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
 
     done = threading.Event()
     exit_codes: dict[str, int] = {}
+    on_output_ref: list = []
 
     def start_threads():
         on_output = _make_safe_output(app.append_exp_log, research / "run.log")
+        on_output_ref.append(on_output)
         watchdog.start()
         _launch_agent_thread(agent, repo_path, on_output, done, exit_codes, "agent")
 
     app = ResearchApp(repo_path, multi=False, on_ready=start_threads)
-    app.run()
+    try:
+        app.run()
+    finally:
+        if on_output_ref and hasattr(on_output_ref[0], 'close'):
+            on_output_ref[0].close()
 
     # Cleanup: stop watchdog and terminate agent subprocess when TUI exits
     watchdog.stop()
@@ -379,8 +400,11 @@ def do_run_multi(
     stop = threading.Event()
     exit_codes: dict[str, int] = {}
 
+    on_output_ref: list = []
+
     def start_threads():
         on_output = _make_safe_output(app.append_log, research / "run.log")
+        on_output_ref.append(on_output)
 
         # Watchdog resets each cycle — terminates experiment agent on timeout
         watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: exp_agent.terminate())
@@ -394,7 +418,7 @@ def do_run_multi(
             return
 
         def _alternating():
-            """Alternate: idea agent generates 1 idea → experiment agent runs it → repeat."""
+            """Alternate: idea agent generates 1 idea -> experiment agent runs it -> repeat."""
             cycle = 0
             while not stop.is_set():
                 cycle += 1
@@ -443,6 +467,8 @@ def do_run_multi(
                     phase = phase_gate.check()
                     if phase:
                         on_output(f"[system] Phase transition to '{phase}' — pausing for review.")
+                        _set_paused(research, f"Phase transition to '{phase}'")
+                        break
 
                     if not _has_pending_ideas(research):
                         on_output("[exp] No more pending ideas.")
@@ -460,12 +486,16 @@ def do_run_multi(
         t.start()
 
     app = ResearchApp(repo_path, multi=True, on_ready=start_threads)
-    app.run()
+    try:
+        app.run()
+    finally:
+        if on_output_ref and hasattr(on_output_ref[0], 'close'):
+            on_output_ref[0].close()
 
     # Cleanup: terminate agent subprocesses when TUI exits
+    stop.set()  # Signal alternating thread to stop when TUI exits
     idea_agent.terminate()
     exp_agent.terminate()
-    stop.set()  # Signal alternating thread to stop when TUI exits
 
     for key, name in [("idea", "Idea Agent"), ("exp", "Experiment Agent")]:
         code = exit_codes.get(key, -1)

@@ -2,11 +2,18 @@
 
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 import typer
 
 logs_app = typer.Typer(help="View agent logs.")
+
+
+def _is_error_line(line: str) -> bool:
+    """Unified filter for error lines."""
+    lower = line.lower()
+    return "error" in lower or "traceback" in lower
 
 
 @logs_app.callback(invoke_without_command=True)
@@ -21,13 +28,18 @@ def show_logs(
         print("No log file found at .research/run.log")
         raise SystemExit(1)
 
-    lines = log_path.read_text().splitlines()
+    # Use deque to read only the last N lines without loading entire file
+    with open(log_path) as f:
+        if errors:
+            last_lines = deque(
+                (line for line in f if _is_error_line(line)),
+                maxlen=last,
+            )
+        else:
+            last_lines = deque(f, maxlen=last)
 
-    if errors:
-        lines = [line for line in lines if "error" in line.lower() or "traceback" in line.lower()]
-
-    for line in lines[-last:]:
-        print(line)
+    for line in last_lines:
+        print(line, end="" if line.endswith("\n") else "\n")
 
     if follow:
         try:
@@ -36,7 +48,7 @@ def show_logs(
                 while True:
                     line = f.readline()
                     if line:
-                        if errors and "error" not in line.lower():
+                        if errors and not _is_error_line(line):
                             continue
                         print(line, end="")
                     else:

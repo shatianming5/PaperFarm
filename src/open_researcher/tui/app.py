@@ -1,8 +1,10 @@
 """Main Textual application for Open Researcher."""
 
 import json
+import logging
 from pathlib import Path
 
+from filelock import FileLock
 from textual.app import App, ComposeResult
 from textual.containers import ScrollableContainer
 from textual.css.query import NoMatches
@@ -11,6 +13,7 @@ from textual.widgets import RichLog, TabbedContent, TabPane
 from open_researcher.activity import ActivityMonitor
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.status_cmd import parse_research_state
+from open_researcher.storage import atomic_write_json
 from open_researcher.tui.modals import AddIdeaModal, GPUStatusModal, LogScreen
 from open_researcher.tui.widgets import (
     DocViewer,
@@ -21,6 +24,8 @@ from open_researcher.tui.widgets import (
     RecentExperiments,
     StatsBar,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ResearchApp(App):
@@ -139,21 +144,27 @@ class ResearchApp(App):
                 )
             except NoMatches:
                 pass
-        except Exception:
+        except (json.JSONDecodeError, OSError, KeyError, NoMatches):
             pass
+        except Exception:
+            logger.debug("Unexpected error refreshing results", exc_info=True)
 
     def _read_control(self) -> dict:
         ctrl_path = self.research_dir / "control.json"
-        if ctrl_path.exists():
-            try:
-                return json.loads(ctrl_path.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
+        lock = FileLock(str(ctrl_path) + ".lock")
+        with lock:
+            if ctrl_path.exists():
+                try:
+                    return json.loads(ctrl_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass
         return {"paused": False, "skip_current": False}
 
     def _write_control(self, data: dict) -> None:
         ctrl_path = self.research_dir / "control.json"
-        ctrl_path.write_text(json.dumps(data, indent=2))
+        lock = FileLock(str(ctrl_path) + ".lock")
+        with lock:
+            atomic_write_json(ctrl_path, data)
 
     def action_pause(self) -> None:
         ctrl = self._read_control()
@@ -176,13 +187,14 @@ class ResearchApp(App):
     def action_add_idea(self) -> None:
         def on_result(result: dict | None) -> None:
             if result:
+                desc = result.get("description", "")
                 self.pool.add(
-                    result["description"],
+                    desc,
                     source="user",
-                    category=result["category"],
-                    priority=result["priority"],
+                    category=result.get("category", "general"),
+                    priority=result.get("priority", 5),
                 )
-                self.notify(f"Added idea: {result['description'][:40]}")
+                self.notify(f"Added idea: {desc[:40]}")
 
         self.push_screen(AddIdeaModal(), on_result)
 
@@ -191,8 +203,10 @@ class ResearchApp(App):
         gpus = []
         if gpu_path.exists():
             try:
-                gpus = json.loads(gpu_path.read_text()).get("gpus", [])
-            except (json.JSONDecodeError, OSError):
+                data = json.loads(gpu_path.read_text())
+                if isinstance(data, dict):
+                    gpus = data.get("gpus", [])
+            except (json.JSONDecodeError, OSError, TypeError):
                 pass
         self.push_screen(GPUStatusModal(gpus))
 

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from filelock import FileLock
 
+from open_researcher.storage import atomic_write_json
+
 
 class GPUManager:
     """Manage GPU allocation across local and remote hosts."""
@@ -24,7 +26,7 @@ class GPUManager:
         return {"gpus": []}
 
     def _write(self, data: dict) -> None:
-        self.status_file.write_text(json.dumps(data, indent=2))
+        atomic_write_json(self.status_file, data)
 
     def _parse_nvidia_smi(self, output: str, host: str = "local") -> list[dict]:
         gpus = []
@@ -49,11 +51,15 @@ class GPUManager:
         return gpus
 
     def detect_local(self) -> list[dict]:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu", "--format=csv"],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu", "--format=csv"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, OSError):
+            return []
         if result.returncode != 0:
             return []
         return self._parse_nvidia_smi(result.stdout, host="local")
@@ -138,4 +144,5 @@ class GPUManager:
             self._write(data)
 
     def status(self) -> list[dict]:
-        return self._read()["gpus"]
+        with self._lock:
+            return self._read()["gpus"]

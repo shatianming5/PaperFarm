@@ -30,10 +30,10 @@ def _has_real_content(path: Path) -> bool:
         return False
     return any(
         line.strip()
-        and not line.startswith("#")
-        and not line.startswith(">")
+        and not line.strip().startswith("#")
+        and not line.strip().startswith(">")
         and "<!--" not in line
-        and not line.startswith("|")
+        and not line.strip().startswith("|")
         for line in content.splitlines()
     )
 
@@ -76,7 +76,10 @@ def parse_research_state(repo_path: Path) -> dict:
     # Parse config
     config_path = research / "config.yaml"
     if config_path.exists():
-        config = yaml.safe_load(config_path.read_text()) or {}
+        try:
+            config = yaml.safe_load(config_path.read_text()) or {}
+        except yaml.YAMLError:
+            config = {}
         state["mode"] = config.get("mode", "autonomous")
         metrics = config.get("metrics", {}).get("primary", {})
         state["primary_metric"] = metrics.get("name", "")
@@ -100,7 +103,8 @@ def parse_research_state(repo_path: Path) -> dict:
     state["recent"] = rows[-5:] if rows else []
 
     # Compute metric values — skip rows with non-numeric or NaN metrics
-    higher = state["direction"] == "higher_is_better"
+    # Default to higher_is_better when direction is empty (consistent with results_cmd.py)
+    higher = state["direction"] != "lower_is_better"
     keep_rows = [r for r in rows if r.get("status") == "keep"]
     values = []
     for r in keep_rows:
@@ -119,13 +123,17 @@ def parse_research_state(repo_path: Path) -> dict:
     state["phase"] = _detect_phase(research)
 
     # Git branch
-    result = subprocess.run(
-        ["git", "branch", "--show-current"],
-        capture_output=True,
-        text=True,
-        cwd=repo_path,
-    )
-    state["branch"] = result.stdout.strip() if result.returncode == 0 else "unknown"
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            cwd=repo_path,
+            timeout=5,
+        )
+        state["branch"] = result.stdout.strip() if result.returncode == 0 else "unknown"
+    except (subprocess.TimeoutExpired, OSError):
+        state["branch"] = "unknown"
 
     return state
 

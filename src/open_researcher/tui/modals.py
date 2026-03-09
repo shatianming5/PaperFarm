@@ -35,7 +35,7 @@ class AddIdeaModal(ModalScreen[dict | None]):
                     pri = 5
                 self.dismiss({"description": desc, "category": cat, "priority": pri})
             else:
-                self.dismiss(None)
+                self.notify("Description cannot be empty", severity="warning")
         else:
             self.dismiss(None)
 
@@ -87,13 +87,22 @@ class LogScreen(Screen):
         self.log_path = log_path
 
     def compose(self) -> ComposeResult:
+        import os as _os
         from pathlib import Path
 
         content = ""
         p = Path(self.log_path)
         if p.exists():
-            lines = p.read_text().splitlines()
-            content = "\n".join(lines[-200:])
+            try:
+                CHUNK = 64 * 1024
+                with open(p, encoding="utf-8", errors="replace") as f:
+                    f.seek(0, _os.SEEK_END)
+                    pos = max(f.tell() - CHUNK, 0)
+                    f.seek(pos)
+                    tail = f.read().splitlines()[-200:]
+                content = "\n".join(tail)
+            except OSError:
+                content = "(Error reading log file)"
         yield TextArea(content, read_only=True, id="log-content")
         yield Static("Press \\[Esc] or \\[q] to return", id="log-footer")
 

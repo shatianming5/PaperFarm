@@ -1,10 +1,16 @@
 """Idea pool file manager with file locking for concurrent access."""
 
-import json
+import copy
 from datetime import datetime, timezone
 from pathlib import Path
 
 from filelock import FileLock
+
+from open_researcher.storage import atomic_write_json, locked_read_json, locked_update_json
+
+
+def _default_pool() -> dict:
+    return {"ideas": []}
 
 
 class IdeaPool:
@@ -14,16 +20,15 @@ class IdeaPool:
         self.path = path
         self._lock = FileLock(str(path) + ".lock")
 
-    def _read(self) -> dict:
-        if not self.path.exists():
-            return {"ideas": []}
-        try:
-            return json.loads(self.path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {"ideas": []}
+    # ---- low-level helpers ------------------------------------------------
+
+    def _read_locked(self) -> dict:
+        """Read idea pool JSON under lock; returns default on missing/corrupt."""
+        return locked_read_json(self.path, self._lock, default=_default_pool)
 
     def _write(self, data: dict) -> None:
-        self.path.write_text(json.dumps(data, indent=2))
+        """Atomic write (caller must already hold the lock)."""
+        atomic_write_json(self.path, data)
 
     def _next_id(self, data: dict) -> str:
         existing = [i["id"] for i in data["ideas"]]
@@ -33,12 +38,13 @@ class IdeaPool:
         return f"idea-{n:03d}"
 
     def _atomic_update(self, updater) -> dict:
-        """Lock file, read, apply updater function, write back, return data."""
-        with self._lock:
-            data = self._read()
-            result = updater(data)
-            self._write(data)
-            return result
+        """Lock file, read, apply updater function, write back, return updater result."""
+        _data, result = locked_update_json(
+            self.path, self._lock, updater, default=_default_pool
+        )
+        return result
+
+    # ---- public API (signatures unchanged) --------------------------------
 
     def add(
         self,
@@ -68,8 +74,7 @@ class IdeaPool:
 
     def claim_idea(self, worker_id: str) -> dict | None:
         """Atomically claim the highest-priority pending idea for a worker."""
-        with self._lock:
-            data = self._read()
+        def _do(data):
             pending = [i for i in data["ideas"] if i["status"] == "pending"]
             pending.sort(key=lambda x: x["priority"])
             if not pending:
@@ -80,17 +85,22 @@ class IdeaPool:
                     idea["status"] = "running"
                     idea["claimed_by"] = worker_id
                     break
-            self._write(data)
-            return target
+            # 返回浅拷贝，避免调用方持有被修改后的引用
+            return copy.copy(target)
+
+        _data, result = locked_update_json(
+            self.path, self._lock, _do, default=_default_pool
+        )
+        return result
 
     def list_by_status(self, status: str) -> list[dict]:
-        data = self._read()
+        data = self._read_locked()
         filtered = [i for i in data["ideas"] if i["status"] == status]
         filtered.sort(key=lambda x: x["priority"])
         return filtered
 
     def all_ideas(self) -> list[dict]:
-        return self._read()["ideas"]
+        return self._read_locked()["ideas"]
 
     def update_status(self, idea_id: str, status: str, experiment: int | None = None) -> None:
         def _do(data):
@@ -102,7 +112,7 @@ class IdeaPool:
                     break
         self._atomic_update(_do)
 
-    def mark_done(self, idea_id: str, metric_value: float, verdict: str) -> None:
+    def mark_done(self, idea_id: str, metric_value: float | None, verdict: str) -> None:
         def _do(data):
             for idea in data["ideas"]:
                 if idea["id"] == idea_id:
@@ -125,7 +135,7 @@ class IdeaPool:
         self._atomic_update(_do)
 
     def summary(self) -> dict:
-        data = self._read()
+        data = self._read_locked()
         ideas = data["ideas"]
         return {
             "pending": sum(1 for i in ideas if i["status"] == "pending"),

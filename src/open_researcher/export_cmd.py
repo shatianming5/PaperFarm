@@ -12,7 +12,10 @@ def generate_report(repo_path: Path) -> str:
     research = repo_path / ".research"
     config_path = research / "config.yaml"
     if config_path.exists():
-        config = yaml.safe_load(config_path.read_text()) or {}
+        try:
+            config = yaml.safe_load(config_path.read_text()) or {}
+        except yaml.YAMLError:
+            config = {}
     else:
         config = {}
     rows = load_results(repo_path)
@@ -40,11 +43,15 @@ def generate_report(repo_path: Path) -> str:
     lines.append("")
     lines.append("| # | Status | Value | Description |")
     lines.append("|---|--------|-------|-------------|")
+    def _esc(val: str) -> str:
+        """Escape pipe characters in Markdown table cells."""
+        return val.replace('|', '\\|')
+
     for i, row in enumerate(rows, 1):
         lines.append(
-            f"| {i} | {row.get('status', '<missing>')} "
-            f"| {row.get('metric_value', '<missing>')} "
-            f"| {row.get('description', '<missing>')} |"
+            f"| {i} | {_esc(row.get('status', '<missing>'))} "
+            f"| {_esc(row.get('metric_value', '<missing>'))} "
+            f"| {_esc(row.get('description', '<missing>'))} |"
         )
     lines.append("")
 

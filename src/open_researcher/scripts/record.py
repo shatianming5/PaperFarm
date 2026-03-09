@@ -3,9 +3,13 @@
 
 import argparse
 import csv
+import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from filelock import FileLock
 
 
 def get_git_short_hash() -> str:
@@ -28,22 +32,26 @@ def main():
     parser.add_argument("--desc", required=True, help="Brief description")
     args = parser.parse_args()
 
+    # Validate --secondary is valid JSON
+    try:
+        json.loads(args.secondary)
+    except (json.JSONDecodeError, TypeError):
+        print(f"[ERROR] --secondary is not valid JSON: {args.secondary}", file=sys.stderr)
+        raise SystemExit(1)
+
     # Find .research/results.tsv relative to git root
-    git_root = subprocess.run(
+    git_root_result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
-    ).stdout.strip()
+    )
+    if git_root_result.returncode != 0:
+        print("[ERROR] Failed to determine git root. Are you in a git repository?", file=sys.stderr)
+        raise SystemExit(1)
+    git_root = git_root_result.stdout.strip()
     results_path = Path(git_root) / ".research" / "results.tsv"
 
     header = ["timestamp", "commit", "primary_metric", "metric_value", "secondary_metrics", "status", "description"]
-
-    # Create file with header if it doesn't exist
-    if not results_path.exists():
-        results_path.parent.mkdir(parents=True, exist_ok=True)
-        with results_path.open("w", newline="") as f:
-            writer = csv.writer(f, delimiter="\t")
-            writer.writerow(header)
 
     # Append row
     row = [
@@ -55,9 +63,19 @@ def main():
         args.status,
         args.desc,
     ]
-    with results_path.open("a", newline="") as f:
-        writer = csv.writer(f, delimiter="\t")
-        writer.writerow(row)
+
+    lock = FileLock(str(results_path) + ".lock")
+    with lock:
+        # Create file with header if it doesn't exist
+        if not results_path.exists():
+            results_path.parent.mkdir(parents=True, exist_ok=True)
+            with results_path.open("w", newline="") as f:
+                writer = csv.writer(f, delimiter="\t")
+                writer.writerow(header)
+
+        with results_path.open("a", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(row)
 
     print(f"[OK] Recorded: {args.status} | {args.metric}={args.value:.6f} | {args.desc}")
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.syntax import Syntax
 
 config_app = typer.Typer(help="View and manage research configuration.")
 
@@ -16,7 +17,8 @@ def show() -> None:
         print("[ERROR] No .research/config.yaml found.")
         raise SystemExit(1)
     console = Console()
-    console.print(config_path.read_text())
+    text = config_path.read_text()
+    console.print(Syntax(text, "yaml"))
 
 
 @config_app.command()

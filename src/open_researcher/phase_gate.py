@@ -3,6 +3,10 @@
 import json
 from pathlib import Path
 
+from filelock import FileLock
+
+from open_researcher.storage import atomic_write_json
+
 
 class PhaseGate:
     def __init__(self, research_dir: Path, mode: str = "autonomous"):
@@ -31,10 +35,13 @@ class PhaseGate:
 
     def _pause(self, phase: str) -> None:
         ctrl_path = self.research_dir / "control.json"
-        try:
-            ctrl = json.loads(ctrl_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            ctrl = {}
-        ctrl["paused"] = True
-        ctrl["pause_reason"] = f"Phase completed: {phase}"
-        ctrl_path.write_text(json.dumps(ctrl, indent=2))
+        lock = FileLock(str(ctrl_path) + ".lock")
+        reason = f"Phase completed: {phase}"
+        with lock:
+            try:
+                ctrl = json.loads(ctrl_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                ctrl = {}
+            ctrl["paused"] = True
+            ctrl["pause_reason"] = reason
+            atomic_write_json(ctrl_path, ctrl)

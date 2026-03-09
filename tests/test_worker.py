@@ -55,7 +55,7 @@ def test_worker_manager_processes_ideas():
         def mock_agent_factory():
             agent = MagicMock()
 
-            def run_side_effect(workdir, on_output=None, program_file="program.md"):
+            def run_side_effect(workdir, on_output=None, program_file="program.md", **kwargs):
                 run_calls.append(program_file)
                 return 0
 
@@ -233,7 +233,7 @@ def test_worker_manager_stop_signal():
         def mock_agent_factory():
             agent = MagicMock()
 
-            def slow_run(workdir, on_output=None, program_file="program.md"):
+            def slow_run(workdir, on_output=None, program_file="program.md", **kwargs):
                 first_run.set()
                 return 0
 

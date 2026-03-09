@@ -20,7 +20,13 @@ class AiderAdapter(AgentAdapter):
         workdir: Path,
         on_output: Callable[[str], None] | None = None,
         program_file: str = "program.md",
+        env: dict[str, str] | None = None,
     ) -> int:
         program_md = workdir / ".research" / program_file
+        if not program_md.exists():
+            msg = f"[aider] program file not found: {program_md}"
+            if on_output:
+                on_output(msg)
+            return 1
         cmd = self.build_command(program_md, workdir)
-        return self._run_process(cmd, workdir, on_output)
+        return self._run_process(cmd, workdir, on_output, env=env)

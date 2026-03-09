@@ -25,7 +25,10 @@ def load_config(research_dir: Path) -> ResearchConfig:
     config_path = research_dir / "config.yaml"
     if not config_path.exists():
         return ResearchConfig()
-    raw = yaml.safe_load(config_path.read_text()) or {}
+    try:
+        raw = yaml.safe_load(config_path.read_text()) or {}
+    except yaml.YAMLError:
+        return ResearchConfig()
     exp = raw.get("experiment", {})
     metrics = raw.get("metrics", {}).get("primary", {})
     gpu = raw.get("gpu", {})

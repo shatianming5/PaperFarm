@@ -13,8 +13,11 @@ def load_results(repo_path: Path) -> list[dict]:
     results_path = repo_path / ".research" / "results.tsv"
     if not results_path.exists():
         return []
-    with results_path.open() as f:
-        return list(csv.DictReader(f, delimiter="\t"))
+    try:
+        with results_path.open() as f:
+            return list(csv.DictReader(f, delimiter="\t"))
+    except (OSError, UnicodeDecodeError):
+        return []
 
 
 def print_results(repo_path: Path) -> None:
@@ -66,7 +69,10 @@ def print_results_chart(repo_path: Path, metric: str | None = None, last: int | 
     if not rows:
         print("No results to chart.")
         return
-    if last:
+    if last is not None:
+        if last <= 0:
+            print("[ERROR] --last must be a positive integer.", file=sys.stderr)
+            raise SystemExit(1)
         rows = rows[-last:]
 
     # Read config for metric info

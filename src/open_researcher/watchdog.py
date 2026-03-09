@@ -14,6 +14,8 @@ class TimeoutWatchdog:
         self._lock = threading.Lock()
 
     def start(self) -> None:
+        if self.timeout <= 0:
+            return
         with self._lock:
             self._cancel_timer()
             self._timer = threading.Timer(self.timeout, self._fire)
@@ -28,7 +30,10 @@ class TimeoutWatchdog:
             self._cancel_timer()
 
     def _fire(self) -> None:
-        self.on_timeout()
+        try:
+            self.on_timeout()
+        except Exception:
+            pass
 
     def _cancel_timer(self) -> None:
         if self._timer:

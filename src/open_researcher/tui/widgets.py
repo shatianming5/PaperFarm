@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rich.markup import escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.reactive import reactive
@@ -34,7 +35,11 @@ class StatsBar(Static):
             if crash:
                 parts.append(f"[yellow]{crash} crash[/yellow]")
             if best is not None:
-                parts.append(f"[bold cyan]best {pm}={best:.4f}[/bold cyan]")
+                try:
+                    best_str = f"{float(best):.4f}"
+                except (ValueError, TypeError):
+                    best_str = str(best)
+                parts.append(f"[bold cyan]best {escape(str(pm))}={best_str}[/bold cyan]")
         else:
             parts.append("[dim]waiting for experiments...[/dim]")
 
@@ -91,7 +96,7 @@ class ExperimentStatusPanel(Static):
         # Progress bar
         if total > 0:
             bar_width = 20
-            filled = int(bar_width * completed / total) if total else 0
+            filled = min(int(bar_width * completed / total), bar_width) if total else 0
             empty = bar_width - filled
             bar = "\u2588" * filled + "\u2591" * empty
             lines.append(f"     [{color}]{bar}[/{color}]  {completed}/{total} ideas")
@@ -115,7 +120,13 @@ class IdeaListPanel(Static):
             return
 
         # Show ideas in chronological order (by id number) as a cycle history
-        sorted_ideas = sorted(ideas, key=lambda i: i.get("id", "idea-999"))
+        def _sort_key(i):
+            id_str = i.get("id", "idea-999")
+            try:
+                return int(id_str.split("-")[1])
+            except (IndexError, ValueError):
+                return 999999
+        sorted_ideas = sorted(ideas, key=_sort_key)
 
         lines: list[str] = []
         for cycle, idea in enumerate(sorted_ideas, 1):
@@ -140,14 +151,24 @@ class IdeaListPanel(Static):
             elif verdict == "kept" or (sid == "done" and verdict != "discarded"):
                 icon = "[green]\u2713[/green]"
                 val = ""
-                if result and isinstance(result, dict) and result.get("metric_value"):
-                    val = f" val={result['metric_value']:.4f}"
+                if result and isinstance(result, dict):
+                    raw_val = result.get("metric_value")
+                    if raw_val is not None:
+                        try:
+                            val = f" val={float(raw_val):.4f}"
+                        except (ValueError, TypeError):
+                            val = f" val={raw_val}"
                 result_str = f"[green]kept{val}[/green]"
             elif verdict == "discarded":
                 icon = "[red]\u2717[/red]"
                 val = ""
-                if result and isinstance(result, dict) and result.get("metric_value"):
-                    val = f" val={result['metric_value']:.4f}"
+                if result and isinstance(result, dict):
+                    raw_val = result.get("metric_value")
+                    if raw_val is not None:
+                        try:
+                            val = f" val={float(raw_val):.4f}"
+                        except (ValueError, TypeError):
+                            val = f" val={raw_val}"
                 result_str = f"[red]disc{val}[/red]"
             elif sid == "skipped":
                 icon = "[dim]\u2013[/dim]"
@@ -215,19 +236,26 @@ class MetricChart(Static):
 
         values = []
         statuses = []
-        for r in rows:
+        indices = []
+        for idx, r in enumerate(rows, 1):
             try:
-                values.append(float(r.get("metric_value", 0)))
+                val = float(r.get("metric_value", 0))
             except (ValueError, TypeError):
-                values.append(0)
+                continue  # skip invalid values instead of filling 0
+            values.append(val)
             statuses.append(r.get("status", ""))
+            indices.append(idx)
 
-        x = list(range(1, len(values) + 1))
-        p.plot(x, values, marker="braille")
+        if not values:
+            p.title("No valid metric data")
+            plot_widget.refresh()
+            return
+
+        p.plot(indices, values, marker="braille")
 
         # Colored scatter by status
         for status, color in [("keep", "green"), ("discard", "red"), ("crash", "yellow")]:
-            sx = [x[i] for i, s in enumerate(statuses) if s == status]
+            sx = [indices[i] for i, s in enumerate(statuses) if s == status]
             sy = [values[i] for i, s in enumerate(statuses) if s == status]
             if sx:
                 p.scatter(sx, sy, color=color)
@@ -307,11 +335,14 @@ class DocViewer(Static):
         from textual.widgets import Markdown as MarkdownWidget
 
         if self.research_dir and event.value:
-            path = self.research_dir / event.value
-            if path.exists():
-                content = path.read_text()
-            else:
-                content = f"*File not found: {event.value}*"
+            try:
+                path = self.research_dir / event.value
+                if path.exists():
+                    content = path.read_text()
+                else:
+                    content = f"*File not found: {event.value}*"
+            except (UnicodeDecodeError, OSError):
+                content = f"*Error reading: {event.value}*"
             try:
                 self.query_one("#doc-content", MarkdownWidget).update(content)
             except Exception:
