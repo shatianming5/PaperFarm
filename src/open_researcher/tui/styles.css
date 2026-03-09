@@ -10,23 +10,34 @@ Screen {
     padding: 0 1;
 }
 
-#idea-pool {
+#exp-status {
     height: auto;
-    max-height: 12;
-    border: solid $primary;
+    min-height: 2;
+    max-height: 5;
+    border: solid $accent;
+    padding: 0 1;
 }
 
-#agent-status {
-    min-height: 2;
+#idea-scroll {
     height: auto;
-    max-height: 5;
-    border-bottom: solid $accent;
+    max-height: 14;
+    border: solid $primary;
+    overflow-y: auto;
+}
+
+#idea-list {
+    height: auto;
     padding: 0 1;
 }
 
 #agent-log {
     height: 1fr;
     border: solid $primary;
+}
+
+#agent-log.minimized {
+    height: 3;
+    max-height: 3;
 }
 
 #hotkey-bar {

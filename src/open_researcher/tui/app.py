@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from textual.app import App, ComposeResult
+from textual.containers import ScrollableContainer
 from textual.css.query import NoMatches
 from textual.widgets import RichLog
 
@@ -12,9 +13,9 @@ from open_researcher.idea_pool import IdeaPool
 from open_researcher.status_cmd import parse_research_state
 from open_researcher.tui.modals import AddIdeaModal, GPUStatusModal, LogScreen
 from open_researcher.tui.widgets import (
-    AgentStatusWidget,
+    ExperimentStatusPanel,
     HotkeyBar,
-    IdeaPoolTable,
+    IdeaListPanel,
     StatsBar,
 )
 
@@ -31,6 +32,7 @@ class ResearchApp(App):
         ("a", "add_idea", "Add idea"),
         ("g", "gpu_status", "GPU status"),
         ("l", "view_log", "View log"),
+        ("m", "toggle_log", "Min/max log"),
         ("q", "quit_app", "Quit"),
     ]
 
@@ -42,12 +44,14 @@ class ResearchApp(App):
         self.pool = IdeaPool(self.research_dir / "idea_pool.json")
         self.activity = ActivityMonitor(self.research_dir)
         self._on_ready = on_ready
+        self._log_minimized = False
 
     def compose(self) -> ComposeResult:
         yield StatsBar(id="stats-bar")
-        yield IdeaPoolTable(id="idea-pool")
-        yield AgentStatusWidget(id="agent-status")
-        yield RichLog(id="agent-log", wrap=True, markup=False)
+        yield ExperimentStatusPanel(id="exp-status")
+        with ScrollableContainer(id="idea-scroll"):
+            yield IdeaListPanel(id="idea-list")
+        yield RichLog(id="agent-log", wrap=True, markup=True)
         yield HotkeyBar(id="hotkey-bar")
 
     def on_mount(self) -> None:
@@ -65,15 +69,20 @@ class ResearchApp(App):
         except (json.JSONDecodeError, OSError, KeyError, NoMatches):
             pass
 
-        # Refresh idea pool
+        # Refresh idea list + experiment status
         try:
             ideas = self.pool.all_ideas()
-            summary = self.pool.summary()
-            self.query_one("#idea-pool", IdeaPoolTable).update_ideas(ideas, summary)
-        except (json.JSONDecodeError, OSError, KeyError, NoMatches):
-            pass
+            self.query_one("#idea-list", IdeaListPanel).update_ideas(ideas)
 
-        # Refresh agent status (show experiment when active, else idea agent)
+            # Calculate progress
+            completed = sum(1 for i in ideas if i["status"] in ("done", "skipped"))
+            total = len(ideas)
+        except (json.JSONDecodeError, OSError, KeyError, NoMatches):
+            ideas = []
+            completed = 0
+            total = 0
+
+        # Refresh experiment status
         try:
             exp_act = self.activity.get("experiment_master")
             idea_act = self.activity.get("idea_agent")
@@ -82,7 +91,9 @@ class ResearchApp(App):
                 if exp_act and exp_act.get("status") not in (None, "idle")
                 else idea_act
             )
-            self.query_one("#agent-status", AgentStatusWidget).update_status(active)
+            self.query_one("#exp-status", ExperimentStatusPanel).update_status(
+                active, completed, total
+            )
         except (json.JSONDecodeError, OSError, KeyError, NoMatches):
             pass
 
@@ -143,6 +154,18 @@ class ResearchApp(App):
     def action_view_log(self) -> None:
         log_path = str(self.research_dir / "run.log")
         self.push_screen(LogScreen(log_path))
+
+    def action_toggle_log(self) -> None:
+        self._log_minimized = not self._log_minimized
+        try:
+            log = self.query_one("#agent-log", RichLog)
+            if self._log_minimized:
+                log.add_class("minimized")
+                self.notify("Log minimized — press [m] to expand")
+            else:
+                log.remove_class("minimized")
+        except NoMatches:
+            pass
 
     def action_quit_app(self) -> None:
         self.exit()

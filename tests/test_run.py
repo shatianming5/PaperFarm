@@ -169,6 +169,6 @@ def test_make_safe_output_phase_separator(tmp_path):
     assert any("Acting" in line for line in captured)
 
     # The thought line should be dim italic (thinking phase)
-    thought_lines = [l for l in captured if "some thought" in l]
+    thought_lines = [x for x in captured if "some thought" in x]
     assert len(thought_lines) == 1
     assert "[dim italic]" in thought_lines[0]
