@@ -1,10 +1,7 @@
 """Run command — launch AI agents with interactive Textual TUI."""
 
 import json
-import sys
 import threading
-import time
-import traceback
 from pathlib import Path
 
 from rich.console import Console
@@ -50,66 +47,6 @@ def _has_pending_ideas(research_dir: Path) -> bool:
     except (json.JSONDecodeError, OSError):
         return False
 
-
-def _launch_exp_with_wait(
-    agent,
-    workdir: Path,
-    on_output,
-    done_event: threading.Event,
-    exit_codes: dict,
-    stop_event: threading.Event,
-):
-    """Wait for ideas in the pool, then run experiment agent. Restart if more ideas remain."""
-    research = workdir / ".research"
-
-    def _run():
-        try:
-            on_output("[exp] Waiting for Idea Agent to generate ideas...")
-            while not stop_event.is_set():
-                if _has_pending_ideas(research):
-                    break
-                time.sleep(5)
-            if stop_event.is_set():
-                exit_codes["exp"] = 0
-                done_event.set()
-                return
-
-            # Run experiment agent, restart if there are still pending ideas
-            run_count = 0
-            while not stop_event.is_set():
-                run_count += 1
-                on_output(f"[exp] Starting experiment agent (run #{run_count})...")
-                try:
-                    code = agent.run(workdir, on_output=on_output, program_file="experiment_program.md")
-                except Exception as exc:
-                    on_output(f"[exp] Agent error: {exc}")
-                    code = 1
-                exit_codes["exp"] = code
-
-                # Check if there are still pending ideas to process
-                if not _has_pending_ideas(research):
-                    on_output("[exp] No more pending ideas. Waiting for new ideas...")
-                    while not stop_event.is_set():
-                        if _has_pending_ideas(research):
-                            break
-                        time.sleep(10)
-                    if stop_event.is_set():
-                        break
-                else:
-                    on_output("[exp] More pending ideas found, restarting...")
-        except Exception as exc:
-            # Catch-all: ensure thread doesn't die silently
-            try:
-                on_output(f"[exp] Fatal error: {exc}")
-            except Exception:
-                traceback.print_exc(file=sys.stderr)
-            exit_codes["exp"] = 1
-        finally:
-            done_event.set()
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return t
 
 
 def _classify_line(line: str, phase: str) -> str:
@@ -334,26 +271,44 @@ def do_run_multi(
     exit_codes: dict[str, int] = {}
 
     def start_threads():
-        on_idea_output = _make_safe_output(app.append_log, research / "run.log")
-        on_exp_output = _make_safe_output(app.append_log, research / "run.log")
+        on_output = _make_safe_output(app.append_log, research / "run.log")
 
-        _launch_agent_thread(
-            idea_agent,
-            repo_path,
-            on_idea_output,
-            done_idea,
-            exit_codes,
-            "idea",
-            program_file="idea_program.md",
-        )
-        _launch_exp_with_wait(
-            exp_agent,
-            repo_path,
-            on_exp_output,
-            done_exp,
-            exit_codes,
-            stop_exp,
-        )
+        def _sequential():
+            # Phase 1: Run idea agent first
+            on_output("[system] Starting Idea Agent...")
+            try:
+                code = idea_agent.run(
+                    repo_path, on_output=on_output, program_file="idea_program.md"
+                )
+            except Exception as exc:
+                on_output(f"[idea] Agent error: {exc}")
+                code = 1
+            exit_codes["idea"] = code
+            done_idea.set()
+            on_output(f"[system] Idea Agent finished (code={code}). Starting Experiment Agent...")
+
+            # Phase 2: Run experiment agent (with restart loop)
+            run_count = 0
+            while not stop_exp.is_set():
+                run_count += 1
+                on_output(f"[exp] Starting experiment agent (run #{run_count})...")
+                try:
+                    code = exp_agent.run(
+                        repo_path, on_output=on_output, program_file="experiment_program.md"
+                    )
+                except Exception as exc:
+                    on_output(f"[exp] Agent error: {exc}")
+                    code = 1
+                exit_codes["exp"] = code
+
+                if not _has_pending_ideas(research):
+                    on_output("[exp] No more pending ideas. Done.")
+                    break
+                on_output("[exp] More pending ideas found, restarting...")
+            done_exp.set()
+
+        t = threading.Thread(target=_sequential, daemon=True)
+        t.start()
 
     app = ResearchApp(repo_path, multi=True, on_ready=start_threads)
     app.run()

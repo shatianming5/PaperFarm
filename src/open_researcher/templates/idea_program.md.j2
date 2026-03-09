@@ -43,18 +43,14 @@ Valid statuses: `analyzing`, `generating`, `searching`, `idle`
 4. Categories: architecture, training, data, regularization, infrastructure
 5. Update status: `{"status": "generating", "detail": "creating initial idea pool"}`
 
-## Phase 4: Analysis Loop (Continuous)
+## Phase 4: Done
 
-Repeat forever:
-1. Check `.research/results.tsv` for new experiment results
-2. When a new result appears:
-   a. Analyze: what worked, what didn't, why?
-   b. Update status: `{"status": "analyzing", "detail": "reviewing experiment #N"}`
-   c. Generate 1-3 new ideas based on the result
-   d. Adjust priorities of existing pending ideas
-   e. Update status: `{"status": "generating", "detail": "adding ideas from #N analysis"}`
-3. Every {{ search_interval }} experiments: search for new techniques and add ideas
-4. Sleep/wait 30 seconds before checking again
+After generating initial ideas, update status to idle and **exit**:
+```json
+{"idea_agent": {"status": "idle", "detail": "initial ideas generated, waiting for experiment results", "updated_at": "<ISO>"}}
+```
+
+The Experiment Agent will now take over to run experiments. You will be restarted later to analyze results and generate new ideas.
 
 ## Rules
 
