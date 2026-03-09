@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -63,3 +64,46 @@ def test_init_generates_default_tag():
 
         program = (Path(tmpdir) / ".research" / "program.md").read_text()
         assert "research/" in program
+
+
+def test_init_creates_shared_files(tmp_path):
+    """Verify init creates idea_pool.json, activity.json, control.json."""
+    do_init(repo_path=tmp_path, tag="test")
+    research = tmp_path / ".research"
+
+    pool = research / "idea_pool.json"
+    assert pool.exists()
+    data = json.loads(pool.read_text())
+    assert data == {"ideas": []}
+
+    activity = research / "activity.json"
+    assert activity.exists()
+
+    control = research / "control.json"
+    assert control.exists()
+    data = json.loads(control.read_text())
+    assert data == {"paused": False, "skip_current": False}
+
+    # Multi-agent templates rendered
+    assert (research / "idea_program.md").exists()
+    assert (research / "experiment_program.md").exists()
+
+
+def test_worker_prompt_template_renders():
+    from jinja2 import Environment, PackageLoader
+    env = Environment(loader=PackageLoader("open_researcher", "templates"))
+    tmpl = env.get_template("worker_prompt.md.j2")
+    result = tmpl.render(
+        idea_id="idea-003",
+        idea_description="Use cosine annealing with warmup",
+        gpu_devices="0,1",
+        gpu_count=2,
+        worktree_path="/tmp/worktree-003",
+        evaluation_content="# Eval\nRun train.py",
+        config_content="mode: autonomous",
+        tag="demo",
+    )
+    assert "idea-003" in result
+    assert "cosine annealing" in result
+    assert "CUDA_VISIBLE_DEVICES=0,1" in result
+    assert "torchrun" in result
