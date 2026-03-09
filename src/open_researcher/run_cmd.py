@@ -20,6 +20,7 @@ def _launch_agent_thread(
     program_file: str = "program.md",
 ):
     """Run an agent in a background thread."""
+
     def _run():
         try:
             code = agent.run(workdir, on_output=on_output, program_file=program_file)
@@ -98,6 +99,7 @@ def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
         console.print(f"\n[red]Agent {agent.name} exited with code {code}.[/red]")
 
     from open_researcher.status_cmd import print_status
+
     print_status(repo_path)
 
 
@@ -156,11 +158,21 @@ def do_run_multi(
             f.write(line + "\n")
 
     _launch_agent_thread(
-        idea_agent, repo_path, on_idea_output, done_idea, exit_codes, "idea",
+        idea_agent,
+        repo_path,
+        on_idea_output,
+        done_idea,
+        exit_codes,
+        "idea",
         program_file="idea_program.md",
     )
     _launch_agent_thread(
-        exp_agent, repo_path, on_exp_output, done_exp, exit_codes, "exp",
+        exp_agent,
+        repo_path,
+        on_exp_output,
+        done_exp,
+        exit_codes,
+        "exp",
         program_file="experiment_program.md",
     )
 
@@ -174,4 +186,5 @@ def do_run_multi(
             console.print(f"[red]{name} exited with code {code}.[/red]")
 
     from open_researcher.status_cmd import print_status
+
     print_status(repo_path)

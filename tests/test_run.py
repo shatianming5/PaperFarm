@@ -29,6 +29,7 @@ def _setup_research_dir(repo: Path):
 
 def test_run_fails_without_research_dir():
     from open_researcher.run_cmd import do_run
+
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(SystemExit):
             do_run(Path(tmp), agent_name=None, dry_run=False)
@@ -36,15 +37,16 @@ def test_run_fails_without_research_dir():
 
 def test_run_fails_when_no_agent_found():
     from open_researcher.run_cmd import do_run
+
     with tempfile.TemporaryDirectory() as tmp:
         _setup_research_dir(Path(tmp))
-        with patch("open_researcher.run_cmd.detect_agent", return_value=None), \
-             pytest.raises(SystemExit):
+        with patch("open_researcher.run_cmd.detect_agent", return_value=None), pytest.raises(SystemExit):
             do_run(Path(tmp), agent_name=None, dry_run=False)
 
 
 def test_run_dry_run_prints_command(capsys):
     from open_researcher.run_cmd import do_run
+
     with tempfile.TemporaryDirectory() as tmp:
         repo = _setup_research_dir(Path(tmp))
         mock_agent = MagicMock()
@@ -60,6 +62,7 @@ def test_run_dry_run_prints_command(capsys):
 
 def test_run_launches_agent():
     from open_researcher.run_cmd import do_run
+
     with tempfile.TemporaryDirectory() as tmp:
         repo = _setup_research_dir(Path(tmp))
         mock_agent = MagicMock()
@@ -69,9 +72,11 @@ def test_run_launches_agent():
         mock_app = MagicMock()
         mock_app_cls = MagicMock(return_value=mock_app)
 
-        with patch("open_researcher.run_cmd.get_agent", return_value=mock_agent), \
-             patch("open_researcher.tui.app.ResearchApp", mock_app_cls), \
-             patch("open_researcher.status_cmd.print_status", return_value=None):
+        with (
+            patch("open_researcher.run_cmd.get_agent", return_value=mock_agent),
+            patch("open_researcher.tui.app.ResearchApp", mock_app_cls),
+            patch("open_researcher.status_cmd.print_status", return_value=None),
+        ):
             do_run(repo, agent_name="test-agent", dry_run=False)
 
         mock_agent.run.assert_called_once()
@@ -82,11 +87,13 @@ def test_run_multi_fails_without_research_dir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
         from open_researcher.run_cmd import do_run_multi
+
         do_run_multi(repo_path=tmp_path, idea_agent_name=None, exp_agent_name=None, dry_run=False)
 
 
 def test_run_multi_dry_run_shows_master(capsys):
     from open_researcher.run_cmd import do_run_multi
+
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
         research = repo / ".research"

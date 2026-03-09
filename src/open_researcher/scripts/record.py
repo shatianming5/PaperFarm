@@ -31,7 +31,8 @@ def main():
     # Find .research/results.tsv relative to git root
     git_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     results_path = Path(git_root) / ".research" / "results.tsv"
 

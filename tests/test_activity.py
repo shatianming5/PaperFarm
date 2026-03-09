@@ -1,6 +1,5 @@
 """Tests for activity monitor."""
 
-
 import pytest
 
 from open_researcher.activity import ActivityMonitor
@@ -54,6 +53,7 @@ def test_get_all(monitor):
 
 def test_update_worker(tmp_path):
     from open_researcher.activity import ActivityMonitor
+
     am = ActivityMonitor(tmp_path)
     am.update_worker("experiment_master", "w-001", status="coding", idea="idea-001", gpus=[0])
     data = am.get("experiment_master")
@@ -65,6 +65,7 @@ def test_update_worker(tmp_path):
 
 def test_update_worker_multiple(tmp_path):
     from open_researcher.activity import ActivityMonitor
+
     am = ActivityMonitor(tmp_path)
     am.update_worker("experiment_master", "w-001", status="coding", idea="idea-001", gpus=[0])
     am.update_worker("experiment_master", "w-002", status="evaluating", idea="idea-002", gpus=[1, 2])
@@ -74,6 +75,7 @@ def test_update_worker_multiple(tmp_path):
 
 def test_remove_worker(tmp_path):
     from open_researcher.activity import ActivityMonitor
+
     am = ActivityMonitor(tmp_path)
     am.update_worker("experiment_master", "w-001", status="coding", idea="idea-001", gpus=[0])
     am.remove_worker("experiment_master", "w-001")

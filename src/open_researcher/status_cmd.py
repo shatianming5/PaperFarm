@@ -103,7 +103,9 @@ def parse_research_state(repo_path: Path) -> dict:
     # Git branch
     result = subprocess.run(
         ["git", "branch", "--show-current"],
-        capture_output=True, text=True, cwd=repo_path,
+        capture_output=True,
+        text=True,
+        cwd=repo_path,
     )
     state["branch"] = result.stdout.strip() if result.returncode == 0 else "unknown"
 
@@ -168,3 +170,18 @@ def print_status(repo_path: Path) -> None:
         border_style="blue",
     )
     console.print(panel)
+
+    # Show agent activity if available
+    activity_path = research / "activity.json"
+    if activity_path.exists():
+        from open_researcher.activity import ActivityMonitor
+
+        monitor = ActivityMonitor(research)
+        all_act = monitor.get_all()
+        if all_act:
+            act_lines = ["  Agent Activity:"]
+            for key, act in all_act.items():
+                a_status = act.get("status", "idle")
+                detail = act.get("detail", "")
+                act_lines.append(f"    {key}: [{a_status}] {detail}")
+            console.print(Panel("\n".join(act_lines), title="Agents", border_style="green"))

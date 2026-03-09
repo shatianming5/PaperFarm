@@ -20,5 +20,10 @@ class AgentAdapter(ABC):
         """Build the subprocess command list to launch the agent."""
 
     @abstractmethod
-    def run(self, workdir: Path, on_output: Callable[[str], None] | None = None) -> int:
+    def run(
+        self,
+        workdir: Path,
+        on_output: Callable[[str], None] | None = None,
+        program_file: str = "program.md",
+    ) -> int:
         """Launch the agent, stream output via callback, return exit code."""

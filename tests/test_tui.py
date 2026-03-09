@@ -22,8 +22,12 @@ def test_idea_pool_update():
     panel = IdeaPoolPanel()
     ideas = [
         {
-            "id": "idea-001", "description": "cosine LR", "status": "running",
-            "priority": 1, "assigned_experiment": 8, "result": None,
+            "id": "idea-001",
+            "description": "cosine LR",
+            "status": "running",
+            "priority": 1,
+            "assigned_experiment": 8,
+            "result": None,
         },
         {"id": "idea-002", "description": "gradient clip", "status": "pending", "priority": 2, "result": None},
     ]
@@ -37,8 +41,10 @@ def test_idea_pool_update():
 def test_agent_panel_update():
     panel = AgentPanel()
     activity = {
-        "status": "evaluating", "idea": "cosine LR",
-        "gpu": {"host": "local", "device": 0}, "branch": "exp/cosine-lr",
+        "status": "evaluating",
+        "idea": "cosine LR",
+        "gpu": {"host": "local", "device": 0},
+        "branch": "exp/cosine-lr",
     }
     panel.update_from_activity(activity, "Experiment Agent", ["Epoch 4/10 loss=1.43"])
     assert "evaluating" in panel.agent_text
@@ -54,6 +60,7 @@ def test_agent_panel_no_activity():
 
 def test_worker_status_panel_update():
     from open_researcher.tui.widgets import WorkerStatusPanel
+
     panel = WorkerStatusPanel()
     workers = [
         {"id": "w-001", "idea": "idea-001", "gpus": [0], "status": "evaluating"},
@@ -70,6 +77,7 @@ def test_worker_status_panel_update():
 
 def test_worker_status_panel_empty():
     from open_researcher.tui.widgets import WorkerStatusPanel
+
     panel = WorkerStatusPanel()
     panel.update_workers([], gpu_total=0)
     assert "No workers" in panel.workers_text
@@ -79,9 +87,14 @@ def test_idea_pool_shows_gpu_info():
     panel = IdeaPoolPanel()
     ideas = [
         {
-            "id": "idea-001", "description": "cosine LR", "status": "running",
-            "priority": 1, "assigned_experiment": 8, "result": None,
-            "gpu_hint": 2, "claimed_by": "w-001",
+            "id": "idea-001",
+            "description": "cosine LR",
+            "status": "running",
+            "priority": 1,
+            "assigned_experiment": 8,
+            "result": None,
+            "gpu_hint": 2,
+            "claimed_by": "w-001",
         },
     ]
     summary = {"pending": 0, "running": 1, "done": 0, "skipped": 0, "total": 1}

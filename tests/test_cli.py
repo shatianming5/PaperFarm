@@ -57,6 +57,7 @@ def test_run_dry_run():
         assert result.exit_code == 0
 
         from unittest.mock import MagicMock, patch
+
         mock_agent = MagicMock()
         mock_agent.name = "mock-agent"
         mock_agent.build_command.return_value = ["mock-cmd", "--test"]

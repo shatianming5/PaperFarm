@@ -104,6 +104,7 @@ def test_init_creates_shared_files(tmp_path):
 
 def test_worker_prompt_template_renders():
     from jinja2 import Environment, PackageLoader
+
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
     tmpl = env.get_template("worker_prompt.md.j2")
     result = tmpl.render(
@@ -124,6 +125,7 @@ def test_worker_prompt_template_renders():
 
 def test_experiment_program_master_mode():
     from jinja2 import Environment, PackageLoader
+
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
     tmpl = env.get_template("experiment_program.md.j2")
     result = tmpl.render(tag="demo")

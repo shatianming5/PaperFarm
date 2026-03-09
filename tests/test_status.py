@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 
@@ -11,11 +12,7 @@ def test_parse_state_with_results():
         research.mkdir()
 
         (research / "config.yaml").write_text(
-            "mode: autonomous\n"
-            "metrics:\n"
-            "  primary:\n"
-            "    name: accuracy\n"
-            "    direction: higher_is_better\n"
+            "mode: autonomous\nmetrics:\n  primary:\n    name: accuracy\n    direction: higher_is_better\n"
         )
 
         (research / "results.tsv").write_text(
@@ -57,11 +54,7 @@ def test_parse_state_empty():
         research.mkdir()
 
         (research / "config.yaml").write_text(
-            "mode: collaborative\n"
-            "metrics:\n"
-            "  primary:\n"
-            "    name: ''\n"
-            "    direction: ''\n"
+            "mode: collaborative\nmetrics:\n  primary:\n    name: ''\n    direction: ''\n"
         )
         (research / "results.tsv").write_text(
             "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
@@ -81,19 +74,13 @@ def test_detect_phase_2_literature():
         research.mkdir()
 
         (research / "config.yaml").write_text(
-            "mode: autonomous\n"
-            "metrics:\n"
-            "  primary:\n"
-            "    name: ''\n"
-            "    direction: ''\n"
+            "mode: autonomous\nmetrics:\n  primary:\n    name: ''\n    direction: ''\n"
         )
         (research / "results.tsv").write_text(
             "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
         )
         # Filled project understanding
-        (research / "project-understanding.md").write_text(
-            "# Project\n\nThis is a real project description."
-        )
+        (research / "project-understanding.md").write_text("# Project\n\nThis is a real project description.")
         # Empty literature review
         (research / "literature.md").write_text("<!-- empty -->")
         (research / "evaluation.md").write_text("<!-- empty -->")
@@ -109,21 +96,13 @@ def test_detect_phase_3_evaluation():
         research.mkdir()
 
         (research / "config.yaml").write_text(
-            "mode: autonomous\n"
-            "metrics:\n"
-            "  primary:\n"
-            "    name: ''\n"
-            "    direction: ''\n"
+            "mode: autonomous\nmetrics:\n  primary:\n    name: ''\n    direction: ''\n"
         )
         (research / "results.tsv").write_text(
             "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
         )
-        (research / "project-understanding.md").write_text(
-            "# Project\n\nThis is a real project description."
-        )
-        (research / "literature.md").write_text(
-            "# Literature Review\n\nFound relevant papers on optimization."
-        )
+        (research / "project-understanding.md").write_text("# Project\n\nThis is a real project description.")
+        (research / "literature.md").write_text("# Literature Review\n\nFound relevant papers on optimization.")
         (research / "evaluation.md").write_text("<!-- empty -->")
 
         state = parse_research_state(Path(tmpdir))
@@ -149,3 +128,27 @@ def test_print_status_english_output(capsys):
         assert "分支" not in captured.out
         assert "模式" not in captured.out
         assert "实验统计" not in captured.out
+
+
+def test_status_shows_activity(tmp_path):
+    """Status should not crash when activity.json exists."""
+    research = tmp_path / ".research"
+    research.mkdir()
+    # Minimal config
+    config_text = "mode: autonomous\nmetrics:\n  primary:\n    name: acc\n    direction: higher_is_better\n"
+    (research / "config.yaml").write_text(config_text)
+    header = "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+    (research / "results.tsv").write_text(header)
+    (research / "activity.json").write_text(
+        json.dumps(
+            {"idea_agent": {"status": "analyzing", "detail": "reviewing #3", "updated_at": "2026-03-09T15:00:00Z"}}
+        )
+    )
+    # Create the docs files as empty
+    for name in ["project-understanding.md", "literature.md", "evaluation.md"]:
+        (research / name).write_text("# placeholder\n")
+    from open_researcher.status_cmd import parse_research_state
+
+    state = parse_research_state(tmp_path)
+    assert state is not None
+    assert state["total"] == 0

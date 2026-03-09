@@ -29,3 +29,13 @@ environment: |
 research:
   web_search: true          # let agent use web search if available
   search_interval: 5        # refresh ideas every N experiments
+
+# GPU configuration (for multi-agent mode)
+gpu:
+  # Remote hosts for GPU allocation (optional)
+  # remote_hosts:
+  #   - host: "192.168.1.100"
+  #     user: "researcher"
+  #   - host: "192.168.1.101"
+  #     user: "researcher"
+  remote_hosts: []

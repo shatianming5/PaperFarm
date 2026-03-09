@@ -23,7 +23,9 @@ def test_record_appends_to_tsv():
         research_dir = Path(tmpdir, ".research")
         research_dir.mkdir()
         results_file = research_dir / "results.tsv"
-        results_file.write_text("timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n")
+        results_file.write_text(
+            "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+        )
 
         # Copy record.py to target
         target_script = research_dir / "scripts" / "record.py"
@@ -33,12 +35,18 @@ def test_record_appends_to_tsv():
         # Run record.py
         result = subprocess.run(
             [
-                sys.executable, str(target_script),
-                "--metric", "accuracy",
-                "--value", "0.85",
-                "--secondary", '{"f1": 0.83}',
-                "--status", "keep",
-                "--desc", "baseline",
+                sys.executable,
+                str(target_script),
+                "--metric",
+                "accuracy",
+                "--value",
+                "0.85",
+                "--secondary",
+                '{"f1": 0.83}',
+                "--status",
+                "keep",
+                "--desc",
+                "baseline",
             ],
             cwd=tmpdir,
             capture_output=True,
@@ -78,11 +86,16 @@ def test_record_creates_header_if_missing():
 
         result = subprocess.run(
             [
-                sys.executable, str(target_script),
-                "--metric", "loss",
-                "--value", "0.42",
-                "--status", "keep",
-                "--desc", "test",
+                sys.executable,
+                str(target_script),
+                "--metric",
+                "loss",
+                "--value",
+                "0.42",
+                "--status",
+                "keep",
+                "--desc",
+                "test",
             ],
             cwd=tmpdir,
             capture_output=True,

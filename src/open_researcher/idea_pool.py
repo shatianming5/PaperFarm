@@ -32,7 +32,14 @@ class IdeaPool:
             n += 1
         return f"idea-{n:03d}"
 
-    def add(self, description: str, source: str = "original", category: str = "general", priority: int = 5, gpu_hint: int | str = "auto") -> dict:
+    def add(
+        self,
+        description: str,
+        source: str = "original",
+        category: str = "general",
+        priority: int = 5,
+        gpu_hint: int | str = "auto",
+    ) -> dict:
         data = self._read()
         idea = {
             "id": self._next_id(data),

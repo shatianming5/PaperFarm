@@ -30,37 +30,38 @@ class GPUManager:
             if len(parts) < 5:
                 continue
             try:
-                gpus.append({
-                    "host": host,
-                    "device": int(parts[0]),
-                    "memory_total": int(parts[1]),
-                    "memory_used": int(parts[2]),
-                    "memory_free": int(parts[3]),
-                    "utilization": int(parts[4]),
-                    "allocated_to": None,
-                })
+                gpus.append(
+                    {
+                        "host": host,
+                        "device": int(parts[0]),
+                        "memory_total": int(parts[1]),
+                        "memory_used": int(parts[2]),
+                        "memory_free": int(parts[3]),
+                        "utilization": int(parts[4]),
+                        "allocated_to": None,
+                    }
+                )
             except (ValueError, IndexError):
                 continue
         return gpus
 
     def detect_local(self) -> list[dict]:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu",
-             "--format=csv"],
-            capture_output=True, text=True,
+            ["nvidia-smi", "--query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu", "--format=csv"],
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             return []
         return self._parse_nvidia_smi(result.stdout, host="local")
 
     def detect_remote(self, host: str, user: str) -> list[dict]:
-        cmd = (
-            "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu "
-            "--format=csv"
-        )
+        cmd = "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv"
         result = subprocess.run(
             ["ssh", f"{user}@{host}", cmd],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return []

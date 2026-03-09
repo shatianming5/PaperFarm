@@ -39,20 +39,43 @@ def test_full_workflow():
         # 3. Record baseline
         record_script = repo / ".research" / "scripts" / "record.py"
         result = subprocess.run(
-            [sys.executable, str(record_script),
-             "--metric", "accuracy", "--value", "0.85",
-             "--status", "keep", "--desc", "baseline"],
-            cwd=tmpdir, capture_output=True, text=True,
+            [
+                sys.executable,
+                str(record_script),
+                "--metric",
+                "accuracy",
+                "--value",
+                "0.85",
+                "--status",
+                "keep",
+                "--desc",
+                "baseline",
+            ],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, f"record failed: {result.stderr}"
 
         # 4. Record an experiment
         result = subprocess.run(
-            [sys.executable, str(record_script),
-             "--metric", "accuracy", "--value", "0.87",
-             "--secondary", '{"f1": 0.86}',
-             "--status", "keep", "--desc", "increase LR"],
-            cwd=tmpdir, capture_output=True, text=True,
+            [
+                sys.executable,
+                str(record_script),
+                "--metric",
+                "accuracy",
+                "--value",
+                "0.87",
+                "--secondary",
+                '{"f1": 0.86}',
+                "--status",
+                "keep",
+                "--desc",
+                "increase LR",
+            ],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
 
@@ -72,3 +95,62 @@ def test_full_workflow():
         assert "accuracy" in report
         assert "baseline" in report
         assert "increase LR" in report
+
+
+def test_multi_agent_init_creates_all_files(tmp_path):
+    """Verify init creates all files needed for multi-agent mode."""
+    import json as json_mod
+
+    from open_researcher.init_cmd import do_init
+
+    do_init(repo_path=tmp_path, tag="test")
+    research = tmp_path / ".research"
+
+    # Original files
+    assert (research / "program.md").exists()
+    assert (research / "config.yaml").exists()
+    assert (research / "results.tsv").exists()
+
+    # Multi-agent files
+    assert (research / "idea_pool.json").exists()
+    assert (research / "activity.json").exists()
+    assert (research / "control.json").exists()
+    assert (research / "idea_program.md").exists()
+    assert (research / "experiment_program.md").exists()
+
+    # Verify idea_pool.json structure
+    pool = json_mod.loads((research / "idea_pool.json").read_text())
+    assert pool == {"ideas": []}
+
+    # Verify control.json structure
+    ctrl = json_mod.loads((research / "control.json").read_text())
+    assert ctrl["paused"] is False
+    assert ctrl["skip_current"] is False
+
+
+def test_idea_pool_workflow(tmp_path):
+    """Test the full idea lifecycle: add -> pick -> run -> done."""
+    import json as json_mod
+
+    from open_researcher.idea_pool import IdeaPool
+
+    pool_file = tmp_path / "idea_pool.json"
+    pool_file.write_text(json_mod.dumps({"ideas": []}))
+    pool = IdeaPool(pool_file)
+
+    # Add ideas
+    pool.add("cosine LR", source="literature", category="training", priority=1)
+    pool.add("dropout 0.3", source="original", category="regularization", priority=2)
+
+    # Pick highest priority
+    pending = pool.list_by_status("pending")
+    assert pending[0]["description"] == "cosine LR"
+
+    # Mark running
+    pool.update_status(pending[0]["id"], "running", experiment=1)
+    assert pool.summary()["running"] == 1
+
+    # Mark done
+    pool.mark_done(pending[0]["id"], metric_value=0.87, verdict="kept")
+    assert pool.summary()["done"] == 1
+    assert pool.summary()["pending"] == 1

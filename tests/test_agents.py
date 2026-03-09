@@ -59,6 +59,7 @@ def test_detect_agent_returns_none_when_none_installed(monkeypatch):
 
 def test_claude_code_build_command():
     from open_researcher.agents.claude_code import ClaudeCodeAdapter
+
     agent = ClaudeCodeAdapter()
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write("test prompt")
@@ -70,6 +71,7 @@ def test_claude_code_build_command():
 
 def test_codex_build_command():
     from open_researcher.agents.codex import CodexAdapter
+
     agent = CodexAdapter()
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write("test prompt")
@@ -80,6 +82,7 @@ def test_codex_build_command():
 
 def test_aider_build_command():
     from open_researcher.agents.aider import AiderAdapter
+
     agent = AiderAdapter()
     cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
     assert cmd[0] == "aider"
@@ -87,6 +90,7 @@ def test_aider_build_command():
 
 def test_opencode_build_command():
     from open_researcher.agents.opencode import OpencodeAdapter
+
     agent = OpencodeAdapter()
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write("test prompt")
@@ -97,6 +101,7 @@ def test_opencode_build_command():
 
 def test_check_installed_uses_shutil_which(monkeypatch):
     from open_researcher.agents.claude_code import ClaudeCodeAdapter
+
     agent = ClaudeCodeAdapter()
     monkeypatch.setattr(shutil, "which", lambda x: "/usr/bin/claude" if x == "claude" else None)
     assert agent.check_installed() is True

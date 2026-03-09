@@ -39,6 +39,7 @@ def detect_agent() -> AgentAdapter | None:
 
 _loaded = False
 
+
 def _ensure_loaded():
     """Lazy-load all built-in adapters to populate the registry."""
     global _loaded

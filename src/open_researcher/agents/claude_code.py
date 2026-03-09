@@ -21,12 +21,21 @@ class ClaudeCodeAdapter(AgentAdapter):
         prompt = program_md.read_text()
         return [self.command, "-p", prompt, "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep"]
 
-    def run(self, workdir: Path, on_output: Callable[[str], None] | None = None) -> int:
-        program_md = workdir / ".research" / "program.md"
+    def run(
+        self,
+        workdir: Path,
+        on_output: Callable[[str], None] | None = None,
+        program_file: str = "program.md",
+    ) -> int:
+        program_md = workdir / ".research" / program_file
         cmd = self.build_command(program_md, workdir)
         proc = subprocess.Popen(
-            cmd, cwd=str(workdir), stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1,
+            cmd,
+            cwd=str(workdir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
         for line in proc.stdout:
             if on_output:
