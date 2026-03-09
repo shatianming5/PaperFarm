@@ -103,7 +103,7 @@ def test_run_multi_fails_without_research_dir(tmp_path, monkeypatch):
         do_run_multi(repo_path=tmp_path, idea_agent_name=None, exp_agent_name=None, dry_run=False)
 
 
-def test_run_multi_dry_run_shows_master(capsys):
+def test_run_multi_dry_run_shows_agents(capsys):
     from open_researcher.run_cmd import do_run_multi
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -123,4 +123,4 @@ def test_run_multi_dry_run_shows_master(capsys):
 
         captured = capsys.readouterr()
         assert "Idea Agent" in captured.out
-        assert "Experiment Master" in captured.out
+        assert "Experiment Agent" in captured.out

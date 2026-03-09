@@ -255,7 +255,7 @@ def do_run_multi(
 
     if dry_run:
         console.print(f"[bold]Idea Agent:[/bold] {idea_agent.name}")
-        console.print(f"[bold]Experiment Master Agent:[/bold] {exp_agent.name}")
+        console.print(f"[bold]Experiment Agent:[/bold] {exp_agent.name}")
         console.print(f"[bold]Working directory:[/bold] {repo_path}")
         console.print("\n[dim]Dry run -- no agents launched.[/dim]")
         return
@@ -302,7 +302,7 @@ def do_run_multi(
     exp_agent.terminate()
     stop_exp.set()  # Signal experiment thread to stop when TUI exits
 
-    for key, name in [("idea", "Idea Agent"), ("exp", "Experiment Master")]:
+    for key, name in [("idea", "Idea Agent"), ("exp", "Experiment Agent")]:
         code = exit_codes.get(key, -1)
         if code == 0:
             console.print(f"[green]{name} completed successfully.[/green]")

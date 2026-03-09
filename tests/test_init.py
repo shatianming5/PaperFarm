@@ -110,8 +110,16 @@ def test_experiment_program_serial_mode():
     result = tmpl.render(tag="demo")
     assert "Serial Experiment Runner" in result
     assert "one at a time" in result
-    assert "CUDA_VISIBLE_DEVICES" in result
+    assert "experiment_progress.json" in result
     assert "research/demo" in result
+
+
+def test_init_creates_experiment_progress(init_dir):
+    """init should create experiment_progress.json with phase=init."""
+    progress = init_dir / "experiment_progress.json"
+    assert progress.exists()
+    data = json.loads(progress.read_text())
+    assert data == {"phase": "init"}
 
 
 def test_init_creates_gpu_status_file(init_dir):

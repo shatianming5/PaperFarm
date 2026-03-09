@@ -59,6 +59,7 @@ def do_init(repo_path: Path, tag: str | None = None) -> None:
     (research_dir / "idea_pool.json").write_text(json.dumps({"ideas": []}, indent=2))
     (research_dir / "activity.json").write_text("{}")
     (research_dir / "control.json").write_text(json.dumps({"paused": False, "skip_current": False}, indent=2))
+    (research_dir / "experiment_progress.json").write_text(json.dumps({"phase": "init"}, indent=2))
 
     # Create GPU status file for parallel experiments
     (research_dir / "gpu_status.json").write_text(json.dumps({"gpus": []}, indent=2))
