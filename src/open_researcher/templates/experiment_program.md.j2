@@ -12,12 +12,25 @@ You are the **Experiment Master Agent**. You orchestrate parallel experiments by
 - **Read**: `.research/control.json` — pause/skip signals
 - **Read/Write**: `.research/gpu_status.json` — GPU availability
 
-## Phase 1: Detect GPUs
+## Phase 1: Detect Environment
 
-1. Run `nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv`
-2. Parse available GPUs and their free memory
-3. Write GPU info to `.research/gpu_status.json`
-4. If no GPUs detected, you will run experiments serially on CPU
+1. Check if GPUs are available:
+   ```bash
+   nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv 2>/dev/null
+   ```
+2. **If GPUs detected:** Write GPU info to `.research/gpu_status.json`, proceed to Phase 2
+3. **If NO GPUs detected (CPU-only mode):**
+   - Write `{"gpus": []}` to `.research/gpu_status.json`
+   - Update activity: `{"experiment_master": {"status": "cpu_serial_mode", "workers": [], "gpu_total": 0, "gpu_active": 0}}`
+   - **IMPORTANT:** You are in CPU-only mode. Skip all GPU allocation and worktree logic.
+   - Instead, run experiments SERIALLY in the current directory:
+     a. Poll `idea_pool.json` for pending ideas
+     b. Pick highest-priority pending idea, mark it as `running`
+     c. Implement the idea directly (no worktree, no branch)
+     d. Run evaluation with `CUDA_VISIBLE_DEVICES=` (empty, forces CPU)
+     e. Record result, mark idea as done
+     f. Repeat
+   - Continue to Phase 2 for baseline, then use the serial loop in Phase 3
 
 ## Phase 2: Establish Baseline (First Run Only)
 
@@ -109,15 +122,7 @@ Keep `.research/activity.json` updated:
 }
 ```
 
-Valid master statuses: `detecting_gpus`, `establishing_baseline`, `scheduling`, `monitoring`, `idle`, `paused`
-
-## CPU-Only Fallback
-
-If no GPUs detected:
-- Run experiments serially (one at a time)
-- No worktree needed for serial mode
-- Still use `idea_pool.json` for idea management
-- Set `CUDA_VISIBLE_DEVICES=` (empty) for CPU mode
+Valid master statuses: `detecting_gpus`, `establishing_baseline`, `scheduling`, `monitoring`, `idle`, `paused`, `cpu_serial_mode`
 
 ## Rules
 
