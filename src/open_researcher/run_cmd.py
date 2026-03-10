@@ -415,6 +415,8 @@ def do_run_multi(
         def _alternating():
             """Alternate: idea agent generates 1 idea -> experiment agent runs it -> repeat."""
             cycle = 0
+            experiments_completed = 0
+            effective_max = cfg.max_experiments
             while not stop.is_set():
                 cycle += 1
 
@@ -439,6 +441,7 @@ def do_run_multi(
                 exp_run = 0
                 while not stop.is_set():
                     exp_run += 1
+                    experiments_completed += 1
                     on_output(f"[exp] Starting experiment agent (run #{exp_run})...")
                     watchdog.reset()
                     try:
@@ -463,6 +466,11 @@ def do_run_multi(
                     if phase:
                         on_output(f"[system] Phase transition to '{phase}' — pausing for review.")
                         _set_paused(research, f"Phase transition to '{phase}'")
+                        break
+
+                    if effective_max > 0 and experiments_completed >= effective_max:
+                        on_output(f"[system] Max experiments ({effective_max}) reached. Stopping.")
+                        stop.set()
                         break
 
                     if not _has_pending_ideas(research):

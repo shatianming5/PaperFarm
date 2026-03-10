@@ -148,6 +148,8 @@ def do_start(
 
             def _alternating():
                 cycle = 0
+                experiments_completed = 0
+                effective_max = cfg.max_experiments
                 while not stop.is_set():
                     cycle += 1
                     on_output(f"[system] === Cycle {cycle}: Starting Idea Agent ===")
@@ -167,6 +169,7 @@ def do_start(
                     exp_run = 0
                     while not stop.is_set():
                         exp_run += 1
+                        experiments_completed += 1
                         watchdog.reset()
                         try:
                             code = exp_agent.run(
@@ -189,6 +192,11 @@ def do_start(
                         if phase:
                             on_output(f"[system] Phase transition to '{phase}'.")
                             _set_paused(research, f"Phase: {phase}")
+                            break
+
+                        if effective_max > 0 and experiments_completed >= effective_max:
+                            on_output(f"[system] Max experiments ({effective_max}) reached. Stopping.")
+                            stop.set()
                             break
 
                         if not _has_pending_ideas(research):
