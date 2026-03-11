@@ -2,6 +2,7 @@
 
 import csv
 import json
+import subprocess
 import tempfile
 import threading
 import time
@@ -11,11 +12,25 @@ from unittest.mock import MagicMock
 from open_researcher.control_plane import issue_control_command
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.worker import WorkerManager
-from open_researcher.worker_plugins import FailureMemoryPlugin, WorkerRuntimePlugins
+from open_researcher.worker_plugins import (
+    FailureMemoryPlugin,
+    WorkerRuntimePlugins,
+    WorkspaceIsolationError,
+)
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True, check=True)
+    (path / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "hello.py"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=str(path), capture_output=True, check=True)
 
 
 def _make_research_dir(tmp: Path) -> Path:
     """Set up a minimal research directory."""
+    _init_git_repo(tmp)
     research = tmp / ".research"
     research.mkdir()
     return research
@@ -257,6 +272,72 @@ def test_worker_manager_handles_agent_exception():
         assert any("Error" in line for line in output_lines)
 
 
+def test_worker_manager_rolls_back_failed_run_in_main_repo():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        idea_pool = _make_idea_pool(
+            research,
+            [
+                {
+                    "id": "idea-001",
+                    "description": "Main repo rollback",
+                    "status": "pending",
+                    "priority": 1,
+                    "claimed_by": None,
+                    "assigned_experiment": None,
+                    "result": None,
+                    "source": "graph",
+                    "category": "graph",
+                    "gpu_hint": "auto",
+                    "created_at": "2026-01-01T00:00:00",
+                    "protocol": "research-v1",
+                    "frontier_id": "frontier-001",
+                    "execution_id": "exec-001",
+                    "hypothesis_id": "hyp-001",
+                    "experiment_spec_id": "spec-001",
+                }
+            ],
+        )
+
+        def mock_agent_factory():
+            agent = MagicMock()
+
+            def run_side_effect(workdir, on_output=None, program_file="program.md", **kwargs):
+                (workdir / "hello.py").write_text("print('mutated')\n", encoding="utf-8")
+                return 1
+
+            agent.run.side_effect = run_side_effect
+            agent.terminate = MagicMock()
+            return agent
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=mock_agent_factory,
+            max_workers=1,
+            on_output=lambda line: None,
+            runtime_plugins=WorkerRuntimePlugins(),
+        )
+
+        wm.start()
+        wm.join(timeout=5)
+
+        summary = idea_pool.summary()
+        assert summary["skipped"] == 1
+        assert (tmp_path / "hello.py").read_text(encoding="utf-8") == "print('hello')\n"
+        status = subprocess.run(
+            ["git", "status", "--short", "--untracked-files=all"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert all(".research" in line for line in status.stdout.splitlines())
+
+
 def test_worker_manager_stop_signal():
     """Calling stop() should cause workers to exit their loop."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -424,6 +505,60 @@ def test_worker_manager_marks_claimed_item_skipped_when_setup_raises():
         # Not all 19 ideas should have been processed
         summary = idea_pool.summary()
         assert summary["done"] + summary["skipped"] + summary["running"] < 19
+
+
+def test_worker_manager_stops_when_workspace_isolation_fails():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        idea_pool = _make_idea_pool(
+            research,
+            [
+                {
+                    "id": "idea-001",
+                    "description": "Isolation failure",
+                    "status": "pending",
+                    "priority": 1,
+                    "claimed_by": None,
+                    "assigned_experiment": None,
+                    "result": None,
+                    "source": "graph",
+                    "category": "graph",
+                    "gpu_hint": "auto",
+                    "created_at": "2026-01-01T00:00:00",
+                    "protocol": "research-v1",
+                    "frontier_id": "frontier-001",
+                    "execution_id": "exec-001",
+                    "hypothesis_id": "hyp-001",
+                    "experiment_spec_id": "spec-001",
+                }
+            ],
+        )
+
+        isolation = MagicMock()
+        isolation.acquire.side_effect = WorkspaceIsolationError("forced worktree failure")
+        agent_factory = MagicMock()
+        output_lines = []
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=agent_factory,
+            max_workers=1,
+            on_output=output_lines.append,
+            runtime_plugins=WorkerRuntimePlugins(workspace_isolation=isolation),
+        )
+
+        wm.start()
+        wm.join(timeout=5)
+
+        agent_factory.assert_not_called()
+        summary = idea_pool.summary()
+        assert summary["pending"] == 1
+        assert wm.fatal_errors == 1
+        assert any("Fatal runtime safety error" in line for line in output_lines)
 
 
 def test_worker_manager_can_disable_advanced_plugins():

@@ -1,6 +1,8 @@
 """Tests for the core research loop extraction."""
 
+import csv
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -23,10 +25,20 @@ from open_researcher.research_events import (
     NoPendingIdeas,
 )
 from open_researcher.research_graph import ResearchGraphStore
-from open_researcher.research_loop import ResearchLoop
+from open_researcher.research_loop import ResearchLoop, read_latest_status
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), capture_output=True, check=True)
+    (path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "app.py"], cwd=str(path), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=str(path), capture_output=True, check=True)
 
 
 def _setup_repo(tmp_path: Path) -> tuple[Path, Path]:
+    _init_git_repo(tmp_path)
     research = tmp_path / ".research"
     research.mkdir()
     (research / "experiment_program.md").write_text("# experiment")
@@ -275,6 +287,143 @@ def test_run_graph_protocol_marks_bare_nonzero_experiment_as_failure(tmp_path):
     assert loop.had_experiment_failure is True
     assert graph["frontier"][0]["terminal_status"] == "skipped"
     assert any("marked the claimed backlog item as skipped/crash" in getattr(event, "detail", "") for event in events)
+
+
+def test_run_graph_protocol_fails_when_preflight_leaves_draft_unresolved(tmp_path):
+    repo_path, research = _setup_repo(tmp_path)
+    (research / "manager_program.md").write_text("# manager")
+    (research / "critic_program.md").write_text("# critic")
+    graph_store = ResearchGraphStore(research / "research_graph.json")
+    graph_store.ensure_exists()
+
+    cfg = ResearchConfig(protocol="research-v1")
+    events = []
+
+    manager_agent = MagicMock()
+    critic_agent = MagicMock()
+    exp_agent = MagicMock()
+
+    def manager_run(workdir, on_output=None, program_file="program.md", **kwargs):
+        graph = graph_store.read()
+        if not graph["frontier"]:
+            graph["hypotheses"] = [{"id": "hyp-001", "summary": "Needs critic resolution"}]
+            graph["experiment_specs"] = [{"id": "spec-001", "hypothesis_id": "hyp-001"}]
+            graph["frontier"] = [
+                {
+                    "id": "frontier-001",
+                    "hypothesis_id": "hyp-001",
+                    "experiment_spec_id": "spec-001",
+                    "description": "Needs critic resolution",
+                    "priority": 1,
+                    "status": "draft",
+                    "claim_state": "candidate",
+                }
+            ]
+            graph_store.path.write_text(json.dumps(graph, indent=2))
+        return 0
+
+    manager_agent.run.side_effect = manager_run
+    critic_agent.run.return_value = 0
+    exp_agent.run.return_value = 0
+
+    loop = ResearchLoop(repo_path, research, cfg, events.append)
+    exit_codes = loop.run_graph_protocol(manager_agent, critic_agent, exp_agent)
+
+    assert exit_codes == {"manager": 0, "critic": 1}
+    assert loop.last_failed_role == "critic"
+    assert loop.last_stop_reason == "critic_preflight_unresolved"
+    assert loop.last_finished_all is False
+    assert not any(isinstance(event, AllIdeasProcessed) for event in events)
+    assert not any(isinstance(event, NoPendingIdeas) for event in events)
+
+
+def test_run_graph_protocol_rolls_back_serial_failure_and_restores_git_cleanliness(tmp_path):
+    repo_path, research = _setup_repo(tmp_path)
+    (research / "manager_program.md").write_text("# manager")
+    (research / "critic_program.md").write_text("# critic")
+    graph_store = ResearchGraphStore(research / "research_graph.json")
+    graph_store.ensure_exists()
+
+    cfg = ResearchConfig(protocol="research-v1")
+    events = []
+
+    manager_agent = MagicMock()
+    critic_agent = MagicMock()
+    exp_agent = MagicMock()
+
+    def manager_run(workdir, on_output=None, program_file="program.md", **kwargs):
+        graph = graph_store.read()
+        if not graph["frontier"]:
+            graph["hypotheses"] = [{"id": "hyp-001", "summary": "Crashy experiment"}]
+            graph["experiment_specs"] = [{"id": "spec-001", "hypothesis_id": "hyp-001"}]
+            graph["frontier"] = [
+                {
+                    "id": "frontier-001",
+                    "hypothesis_id": "hyp-001",
+                    "experiment_spec_id": "spec-001",
+                    "description": "Crashy experiment",
+                    "priority": 1,
+                    "status": "draft",
+                    "claim_state": "candidate",
+                }
+            ]
+            graph_store.path.write_text(json.dumps(graph, indent=2))
+        return 0
+
+    def critic_run(workdir, on_output=None, program_file="program.md", **kwargs):
+        graph = graph_store.read()
+        if graph["frontier"] and graph["frontier"][0]["status"] == "draft":
+            graph["frontier"][0]["status"] = "approved"
+            graph_store.path.write_text(json.dumps(graph, indent=2))
+        return 0
+
+    def exp_run(workdir, on_output=None, program_file="program.md", **kwargs):
+        (workdir / "app.py").write_text("print('mutated')\n", encoding="utf-8")
+        return 1
+
+    manager_agent.run.side_effect = manager_run
+    critic_agent.run.side_effect = critic_run
+    exp_agent.run.side_effect = exp_run
+
+    loop = ResearchLoop(repo_path, research, cfg, events.append)
+    exit_codes = loop.run_graph_protocol(manager_agent, critic_agent, exp_agent, max_experiments=1)
+
+    assert exit_codes["exp"] == 1
+    assert (repo_path / "app.py").read_text(encoding="utf-8") == "print('hello')\n"
+    status = subprocess.run(
+        ["git", "status", "--short", "--untracked-files=all"],
+        cwd=str(repo_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    relevant = [line for line in status.stdout.splitlines() if ".research" not in line]
+    assert relevant == []
+    assert any("marked the claimed backlog item as skipped/crash" in getattr(event, "detail", "") for event in events)
+
+
+def test_read_latest_status_parses_multiline_tsv_rows(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    results_path = research / "results.tsv"
+    with results_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t")
+        writer.writerow(
+            ["timestamp", "commit", "primary_metric", "metric_value", "secondary_metrics", "status", "description"]
+        )
+        writer.writerow(
+            [
+                "2026-03-12T10:00:00Z",
+                "abc1234",
+                "accuracy",
+                "0.910000",
+                "{}",
+                "keep",
+                "line one\nline two",
+            ]
+        )
+
+    assert read_latest_status(research) == "keep"
 
 
 def test_run_graph_protocol_consumes_skip_current_before_serial_experiment(tmp_path):

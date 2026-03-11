@@ -9,12 +9,19 @@ from typing import Callable
 
 from open_researcher.activity import ActivityMonitor
 from open_researcher.control_plane import consume_skip_current, read_control
+from open_researcher.git_safety import (
+    GitWorkspaceError,
+    capture_clean_workspace_snapshot,
+    ensure_clean_workspace,
+    rollback_workspace,
+)
 from open_researcher.gpu_manager import GPUManager
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.results_cmd import load_results
 from open_researcher.watchdog import TimeoutWatchdog
 from open_researcher.worker_plugins import (
     WorkerRuntimePlugins,
+    WorkspaceIsolationError,
     build_default_worker_plugins,
 )
 
@@ -177,6 +184,30 @@ class WorkerManager:
         }.get(status, "completed")
         return metric_value, verdict
 
+    @staticmethod
+    def _result_status_from_row(row: dict | None) -> str:
+        if not isinstance(row, dict):
+            return ""
+        return str(row.get("status", "")).strip()
+
+    @staticmethod
+    def _status_requires_rollback(status: str) -> bool:
+        return status in {"discard", "crash"}
+
+    def _return_idea_to_pending(self, idea_id: str, *, claim_token: str) -> bool:
+        applied = self.idea_pool.update_status(idea_id, "pending", claim_token=claim_token or None)
+        if applied:
+            return True
+        current = self._current_idea_state(idea_id)
+        finished_claim_token = str(current.get("finished_claim_token", "")).strip()
+        if (
+            claim_token
+            and finished_claim_token == claim_token
+            and str(current.get("status", "")).strip() in {"done", "skipped"}
+        ):
+            return self.idea_pool.update_status(idea_id, "pending")
+        return False
+
     def join(self, timeout: float | None = None) -> None:
         """Wait for all worker threads to finish."""
         for t in self._workers:
@@ -224,15 +255,10 @@ class WorkerManager:
 
                 idea_description = str(idea.get("description", ""))
                 claim_token = str(idea.get("claim_token", "")).strip()
-                if self._on_experiment_started is not None:
-                    try:
-                        self._on_experiment_started(dict(idea))
-                    except Exception:
-                        logger.debug("Experiment start callback failed", exc_info=True)
-
                 memory_context = None
                 workspace = None
                 workdir = self.repo_path
+                workspace_snapshot = None
                 run_code = 1
                 notify_finished = True
                 try:
@@ -288,6 +314,13 @@ class WorkerManager:
                     workdir = workspace.workdir if workspace is not None else self.repo_path
                     for line in workspace.log_lines if workspace is not None else []:
                         self.on_output(line)
+                    workspace_snapshot = capture_clean_workspace_snapshot(workdir)
+
+                    if self._on_experiment_started is not None:
+                        try:
+                            self._on_experiment_started(dict(idea))
+                        except Exception:
+                            logger.debug("Experiment start callback failed", exc_info=True)
 
                     agent = self.agent_factory()
                     results_before_count = len(load_results(workdir))
@@ -335,6 +368,9 @@ class WorkerManager:
                     run_code = int(code)
                     strict_result_tracking = str(idea.get("protocol", "")).strip() == "research-v1"
                     current_state = self._current_idea_state(str(idea.get("id", "")))
+                    matched_row = None
+                    result_status = ""
+                    should_requeue = False
                     if code == 0:
                         if strict_result_tracking:
                             matched_row = self._find_matching_result_row(
@@ -342,6 +378,7 @@ class WorkerManager:
                                 results_before_count=results_before_count,
                                 idea=idea,
                             )
+                            result_status = self._result_status_from_row(matched_row)
                             if matched_row is not None:
                                 metric_value, verdict = self._result_payload_from_row(matched_row)
                                 if not self._terminal_result_present(current_state):
@@ -359,10 +396,10 @@ class WorkerManager:
                             elif self._terminal_result_present(current_state):
                                 pass
                             else:
-                                reapplied = self.idea_pool.update_status(
+                                should_requeue = True
+                                reapplied = self._return_idea_to_pending(
                                     idea["id"],
-                                    "pending",
-                                    claim_token=claim_token or None,
+                                    claim_token=claim_token,
                                 )
                                 if reapplied:
                                     self.on_output(
@@ -398,6 +435,31 @@ class WorkerManager:
                                     f"[{wid}] Claim race detected for {idea['id']}; "
                                     "skip write suppressed, cleanup applied"
                                 )
+                    if (
+                        workspace_snapshot is not None
+                        and (run_code != 0 or self._status_requires_rollback(result_status))
+                    ):
+                        rollback_workspace(workdir, workspace_snapshot)
+                    if workspace_snapshot is not None and should_requeue:
+                        rollback_workspace(workdir, workspace_snapshot)
+                    if (
+                        workspace_snapshot is not None
+                        and run_code == 0
+                        and not should_requeue
+                        and not self._status_requires_rollback(result_status)
+                    ):
+                        ensure_clean_workspace(workdir, context="after successful experiment")
+                except (GitWorkspaceError, WorkspaceIsolationError) as exc:
+                    self.on_output(f"[{wid}] Fatal runtime safety error: {exc}")
+                    reapplied = self._return_idea_to_pending(idea["id"], claim_token=claim_token)
+                    if not reapplied:
+                        self.on_output(
+                            f"[{wid}] Claim race detected for {idea['id']}; "
+                            "pending release suppressed after safety error"
+                        )
+                    run_code = 1
+                    self._record_fatal_error()
+                    self.stop()
                 except Exception as exc:
                     self.on_output(f"[{wid}] Error: {exc}")
                     applied = self.idea_pool.update_status(idea["id"], "skipped", claim_token=claim_token or None)
@@ -413,7 +475,12 @@ class WorkerManager:
                     except Exception as exc:
                         logger.debug("Failure memory record failed: %s", exc)
                     if workspace is not None:
-                        workspace.cleanup()
+                        try:
+                            workspace.cleanup()
+                        except WorkspaceIsolationError as exc:
+                            self._record_fatal_error()
+                            self.on_output(str(exc))
+                            self.stop()
                         if workdir != self.repo_path:
                             self.on_output(f"[{wid}] Worktree cleaned up")
                     latest_idea = next(

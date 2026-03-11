@@ -18,6 +18,10 @@ from open_researcher.worktree import create_worktree, remove_worktree
 logger = logging.getLogger(__name__)
 
 
+class WorkspaceIsolationError(RuntimeError):
+    """Raised when worker workspace isolation cannot be established."""
+
+
 @dataclass(slots=True)
 class GPUAllocation:
     """Concrete GPU allocation for one worker."""
@@ -131,17 +135,13 @@ class WorktreeIsolationPlugin:
         try:
             wt_path = create_worktree(self.repo_path, f"{worker_id}-{idea_id}")
         except Exception as exc:
-            return WorkspaceLease(
-                workdir=self.repo_path,
-                cleanup=lambda: None,
-                log_lines=[f"[{worker_id}] Worktree creation failed ({exc}), running in main repo"],
-            )
+            raise WorkspaceIsolationError(f"[{worker_id}] Worktree creation failed: {exc}") from exc
 
         def _cleanup() -> None:
             try:
                 remove_worktree(self.repo_path, wt_path)
-            except Exception:
-                logger.debug("Worktree cleanup failed", exc_info=True)
+            except Exception as exc:
+                raise WorkspaceIsolationError(f"[{worker_id}] Worktree cleanup failed: {exc}") from exc
 
         return WorkspaceLease(
             workdir=wt_path,

@@ -1,5 +1,6 @@
 """Tests for the CLI entry point."""
 
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -7,6 +8,12 @@ from typer.testing import CliRunner
 from open_researcher.cli import app
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 def test_init_via_cli():
@@ -93,7 +100,8 @@ def test_start_help():
     """start --help should show the command."""
     result = runner.invoke(app, ["start", "--help"])
     assert result.exit_code == 0
-    assert "start" in result.stdout.lower() or "Start" in result.stdout
+    plain = _plain(result.stdout)
+    assert "start" in plain.lower() or "Start" in plain
 
 
 def test_start_headless_requires_goal():
@@ -109,29 +117,32 @@ def test_start_headless_help():
     """start --help should show high-level mode and worker flags."""
     result = runner.invoke(app, ["start", "--help"])
     assert result.exit_code == 0
-    assert "--mode" in result.stdout
-    assert "--workers" in result.stdout
-    assert "--max-experiments" in result.stdout
-    assert "--goal" in result.stdout
+    plain = _plain(result.stdout)
+    assert "--mode" in plain
+    assert "--workers" in plain
+    assert "--max-experiments" in plain
+    assert "--goal" in plain
 
 
 def test_hidden_start_flags_are_absent_from_help():
     result = runner.invoke(app, ["start", "--help"])
     assert result.exit_code == 0
-    assert "--multi" not in result.stdout
-    assert "--idea-agent" not in result.stdout
-    assert "--exp-agent" not in result.stdout
-    assert "--headless" not in result.stdout
+    plain = _plain(result.stdout)
+    assert "--multi" not in plain
+    assert "--idea-agent" not in plain
+    assert "--exp-agent" not in plain
+    assert "--headless" not in plain
 
 
 def test_run_help_shows_workers_not_multi():
     result = runner.invoke(app, ["run", "--help"])
     assert result.exit_code == 0
-    assert "--workers" in result.stdout
-    assert "--mode" in result.stdout
-    assert "--goal" in result.stdout
-    assert "--max-experiments" in result.stdout
-    assert "--multi" not in result.stdout
+    plain = _plain(result.stdout)
+    assert "--workers" in plain
+    assert "--mode" in plain
+    assert "--goal" in plain
+    assert "--max-experiments" in plain
+    assert "--multi" not in plain
 
 
 def test_run_without_research_bootstraps_to_start_flow():

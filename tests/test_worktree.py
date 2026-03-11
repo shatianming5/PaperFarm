@@ -165,6 +165,42 @@ def test_worktree_stale_cleanup():
         remove_worktree(repo, wt2)
 
 
+def test_create_worktree_removes_stale_branch_without_directory():
+    """Creating a worktree should prune an orphan branch left behind by an old worker."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _init_git_repo(repo)
+        _setup_research(repo)
+
+        branch_name = "or-worker-stale-branch"
+        subprocess.run(
+            ["git", "branch", branch_name],
+            cwd=str(repo),
+            capture_output=True,
+            check=True,
+        )
+
+        wt_path = create_worktree(repo, "stale-branch")
+
+        assert wt_path.exists()
+        branch_check = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        assert branch_check.returncode == 0
+
+        remove_worktree(repo, wt_path)
+        branch_after = subprocess.run(
+            ["git", "rev-parse", "--verify", branch_name],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        assert branch_after.returncode != 0
+
+
 def test_worker_uses_worktree_isolation():
     """WorkerManager runs each experiment in an isolated worktree."""
     with tempfile.TemporaryDirectory() as tmp:

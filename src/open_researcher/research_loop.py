@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import threading
 import time
@@ -12,6 +13,12 @@ from filelock import FileLock
 from open_researcher.activity import ActivityMonitor
 from open_researcher.config import ResearchConfig
 from open_researcher.crash_counter import CrashCounter
+from open_researcher.git_safety import (
+    GitWorkspaceError,
+    capture_clean_workspace_snapshot,
+    ensure_clean_workspace,
+    rollback_workspace,
+)
 from open_researcher.phase_gate import PhaseGate
 from open_researcher.research_events import (
     AgentOutput,
@@ -51,15 +58,13 @@ def read_latest_status(research_dir: Path) -> str:
     if not results_path.exists():
         return ""
     try:
-        lines = results_path.read_text().strip().splitlines()
-        if len(lines) < 2:
-            return ""
-        parts = lines[-1].split("\t")
-        if len(parts) >= 6:
-            return parts[5].strip()
+        with results_path.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+    except (OSError, UnicodeDecodeError):
         return ""
-    except OSError:
+    if not rows:
         return ""
+    return str(rows[-1].get("status", "")).strip()
 
 
 def set_paused(research_dir: Path, reason: str) -> None:
@@ -394,6 +399,15 @@ class ResearchLoop:
         pool = IdeaBacklog(self.research_dir / "idea_pool.json")
         pool.update_status(idea_id, "skipped")
 
+    def _restore_serial_idea_pending(self, trace: dict) -> None:
+        from open_researcher.idea_pool import IdeaBacklog
+
+        idea_id = str(trace.get("idea_id", "")).strip()
+        if not idea_id:
+            return
+        pool = IdeaBacklog(self.research_dir / "idea_pool.json")
+        pool.update_status(idea_id, "pending")
+
     def _run_serial_experiment_batch(
         self,
         exp_agent,
@@ -418,8 +432,16 @@ class ResearchLoop:
                 if control_action == "skipped":
                     continue
 
-                experiments_completed += 1
                 trace = self._peek_pending_idea_trace()
+                try:
+                    workspace_snapshot = capture_clean_workspace_snapshot(self.repo_path)
+                except GitWorkspaceError as exc:
+                    self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
+                    self.had_experiment_failure = True
+                    self.last_experiment_failure_code = 1
+                    return experiments_completed, 1, "experiment_failed"
+
+                experiments_completed += 1
                 results_before_count = len(load_results(self.repo_path))
                 self.emit(
                     ExperimentStarted(
@@ -461,6 +483,18 @@ class ResearchLoop:
                 )
 
                 status = self._latest_result_status_since(results_before_count)
+                try:
+                    if last_code != 0 or status in {"discard", "crash"}:
+                        rollback_workspace(self.repo_path, workspace_snapshot)
+                    elif last_code == 0:
+                        ensure_clean_workspace(self.repo_path, context="after successful experiment")
+                except GitWorkspaceError as exc:
+                    self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
+                    if last_code == 0:
+                        self._restore_serial_idea_pending(trace)
+                    self.had_experiment_failure = True
+                    self.last_experiment_failure_code = 1
+                    return experiments_completed, 1, "experiment_failed"
                 if last_code != 0:
                     self.had_experiment_failure = True
                     self.last_experiment_failure_code = last_code
@@ -518,6 +552,11 @@ class ResearchLoop:
                 ),
             )
         )
+        try:
+            workspace_snapshot = capture_clean_workspace_snapshot(self.repo_path)
+        except GitWorkspaceError as exc:
+            self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
+            return 1, "experiment_failed"
         watchdog = TimeoutWatchdog(self.cfg.timeout, on_timeout=lambda: exp_agent.terminate())
         watchdog.reset()
         try:
@@ -529,6 +568,15 @@ class ResearchLoop:
             )
         finally:
             watchdog.stop()
+        phase_after = self._read_experiment_phase()
+        try:
+            if code != 0 or phase_after != "experimenting":
+                rollback_workspace(self.repo_path, workspace_snapshot)
+            else:
+                ensure_clean_workspace(self.repo_path, context="after successful experiment")
+        except GitWorkspaceError as exc:
+            self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
+            return 1, "experiment_failed"
         if code != 0:
             return code, "experiment_failed"
         phase_after = self._read_experiment_phase()
@@ -772,6 +820,26 @@ class ResearchLoop:
                             items=rejected_items,
                         )
                     )
+                unresolved_drafts = [
+                    self._frontier_trace(row)
+                    for row in after_preflight.get("frontier", [])
+                    if isinstance(row, dict) and str(row.get("status", "")).strip() == "draft"
+                ]
+                if unresolved_drafts:
+                    self.emit(
+                        AgentOutput(
+                            phase="experimenting",
+                            detail=(
+                                "Preflight critic exited without resolving draft frontier items: "
+                                + ", ".join(item["frontier_id"] for item in unresolved_drafts if item["frontier_id"])
+                            ),
+                        )
+                    )
+                    exit_codes["critic"] = 1
+                    self.emit(RoleFailed(role="critic", exit_code=1))
+                    self.last_failed_role = "critic"
+                    self.last_stop_reason = "critic_preflight_unresolved"
+                    break
 
             if parallel_batch_runner is not None:
                 bootstrap_code, bootstrap_stop_reason = self._ensure_parallel_experiment_ready(
