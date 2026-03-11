@@ -1,6 +1,6 @@
 <div align="center">
 
-# Open Researcher: Let AI Agents Run Experiments While You Sleep
+# Nongmin-Researcher: Planting Seeds, Harvesting Papers
 
 <p>
   <a href="https://pypi.org/project/open-researcher/"><img alt="PyPI" src="https://img.shields.io/pypi/v/open-researcher?style=flat-square&logo=pypi&logoColor=white" /></a>
