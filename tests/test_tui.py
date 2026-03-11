@@ -70,12 +70,13 @@ def test_idea_list_panel_renders():
     assert "\u25b6" in text
     assert "\u2713" in text
     assert "\u00b7" in text
+    assert "idea-001" in text
 
 
 def test_idea_list_panel_empty():
     panel = IdeaListPanel()
     panel.update_ideas([])
-    assert "No ideas" in panel.ideas_text
+    assert "No projected backlog items" in panel.ideas_text
 
 
 def test_hotkey_bar_shows_tabs():
@@ -109,8 +110,8 @@ def test_recent_experiments_empty():
 
 def test_render_ideas_markdown_empty():
     result = render_ideas_markdown([])
-    assert "No ideas yet" in result
-    assert "Idea Backlog" in result
+    assert "No projected backlog items yet" in result
+    assert "Projected Backlog" in result
 
 
 def test_render_ideas_markdown_with_data():
@@ -132,7 +133,7 @@ def test_render_ideas_markdown_with_data():
     assert "1 pending" in result
     assert "1 running" in result
     assert "1 done" in result
-    assert "3 total" in result
+    assert "3 total projected backlog items" in result
 
 
 def test_render_ideas_markdown_escapes_pipe():
@@ -143,3 +144,17 @@ def test_render_ideas_markdown_escapes_pipe():
     result = render_ideas_markdown(ideas)
     assert "A\\|B" in result
     assert "test\\|cat" in result
+
+
+def test_backlog_rendering_sorts_by_priority_not_id():
+    panel = IdeaListPanel()
+    ideas = [
+        {"id": "idea-010", "description": "Low priority", "status": "pending", "priority": 10, "result": None},
+        {"id": "idea-002", "description": "High priority", "status": "pending", "priority": 1, "result": None},
+    ]
+    panel.update_ideas(ideas)
+    lines = panel.ideas_text.splitlines()
+    assert "idea-002" in lines[0]
+
+    markdown = render_ideas_markdown(ideas)
+    assert markdown.index("idea-002") < markdown.index("idea-010")

@@ -1,13 +1,16 @@
 """Implementation of the 'status' command."""
 
 import csv
+import json
 import math
 import subprocess
 from pathlib import Path
 
-import yaml
 from rich.console import Console
 from rich.panel import Panel
+
+from open_researcher.config import RESEARCH_PROTOCOL, ResearchConfig, load_config
+from open_researcher.research_graph import ResearchGraphStore
 
 
 def _safe_float(value: str) -> float | None:
@@ -68,26 +71,93 @@ def _detect_phase(research: Path) -> int:
     return 4
 
 
+def _safe_list_field(payload: dict, key: str) -> list:
+    value = payload.get(key, [])
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list")
+    return value
+
+
+def _load_graph_state(research: Path) -> dict | None:
+    graph_path = research / "research_graph.json"
+    if not graph_path.exists():
+        return None
+    try:
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"error": f"Parse error: {exc}"}
+    if not isinstance(graph, dict):
+        return {"error": "top-level JSON must be an object"}
+
+    try:
+        frontier = _safe_list_field(graph, "frontier")
+        hypotheses = _safe_list_field(graph, "hypotheses")
+        experiment_specs = _safe_list_field(graph, "experiment_specs")
+        evidence = _safe_list_field(graph, "evidence")
+        claim_updates = _safe_list_field(graph, "claim_updates")
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    status_counts: dict[str, int] = {}
+    for row in frontier:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status", "")).strip() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        "version": str(graph.get("version", "")),
+        "hypotheses": len(hypotheses),
+        "experiment_specs": len(experiment_specs),
+        "evidence": len(evidence),
+        "claim_updates": len(claim_updates),
+        "frontier_total": len(frontier),
+        "frontier_status_counts": status_counts,
+        "frontier_runnable": sum(
+            status_counts.get(status, 0)
+            for status in ResearchGraphStore.EXECUTABLE_FRONTIER_STATUSES
+        ),
+    }
+
+
+def _research_phase_label(state: dict) -> str:
+    graph = state.get("graph")
+    if not graph:
+        return PHASE_NAMES.get(state["phase"], "unknown")
+
+    counts = graph.get("frontier_status_counts", {})
+    if counts.get("draft"):
+        return "Research Loop: Critic Preflight"
+    if counts.get("needs_post_review"):
+        return "Research Loop: Critic Post-Review"
+    if counts.get("running"):
+        return "Research Loop: Experiment Running"
+    if counts.get("approved") or counts.get("needs_repro"):
+        return "Research Loop: Experiment Queue Active"
+    if graph.get("frontier_total", 0) > 0:
+        return "Research Loop: Frontier Archived"
+    return "Research Loop: Idle"
+
+
 def parse_research_state(repo_path: Path) -> dict:
     """Parse .research/ directory into a state dict."""
     research = repo_path / ".research"
     state = {}
 
-    # Parse config
-    config_path = research / "config.yaml"
-    if config_path.exists():
-        try:
-            config = yaml.safe_load(config_path.read_text()) or {}
-        except yaml.YAMLError:
-            config = {}
-        state["mode"] = config.get("mode", "autonomous")
-        metrics = config.get("metrics", {}).get("primary", {})
-        state["primary_metric"] = metrics.get("name", "")
-        state["direction"] = metrics.get("direction", "")
-    else:
-        state["mode"] = "unknown"
-        state["primary_metric"] = ""
-        state["direction"] = ""
+    config_error = None
+    try:
+        cfg = load_config(research, strict=True)
+    except ValueError as exc:
+        cfg = ResearchConfig()
+        config_error = str(exc)
+    state["mode"] = cfg.mode
+    state["protocol"] = cfg.protocol
+    state["protocol_supported"] = cfg.protocol == RESEARCH_PROTOCOL and config_error is None
+    state["primary_metric"] = cfg.primary_metric
+    state["direction"] = cfg.direction
+    state["manager_batch_size"] = cfg.manager_batch_size
+    state["config_error"] = config_error
+    state["graph"] = _load_graph_state(research)
 
     # Parse results
     results_path = research / "results.tsv"
@@ -121,6 +191,7 @@ def parse_research_state(repo_path: Path) -> dict:
         state["best_value"] = None
 
     state["phase"] = _detect_phase(research)
+    state["phase_label"] = _research_phase_label(state)
 
     # Git branch
     try:
@@ -173,10 +244,40 @@ def print_status(repo_path: Path, sparkline: bool = False) -> None:
     console = Console()
 
     lines = []
-    lines.append(f"  Phase: {PHASE_NAMES.get(state['phase'], 'unknown')}")
+    lines.append(f"  Phase: {state.get('phase_label', PHASE_NAMES.get(state['phase'], 'unknown'))}")
     lines.append(f"  Branch: {state['branch']}")
     lines.append(f"  Mode: {state['mode']}")
+    protocol = state.get("protocol", "")
+    if protocol:
+        protocol_suffix = "" if state.get("protocol_supported", True) else " (unsupported)"
+        lines.append(f"  Protocol: {protocol}{protocol_suffix}")
+    if state.get("config_error"):
+        lines.append(f"  Config Error: {state['config_error']}")
     lines.append("")
+
+    graph = state.get("graph")
+    if graph:
+        if graph.get("error"):
+            lines.append(f"  Research Graph Error: {graph['error']}")
+        else:
+            counts = graph.get("frontier_status_counts", {})
+            lines.append("  Research Graph:")
+            lines.append(
+                "    "
+                f"Hypotheses: {graph['hypotheses']}  "
+                f"Specs: {graph['experiment_specs']}  "
+                f"Evidence: {graph['evidence']}  "
+                f"Claims: {graph['claim_updates']}"
+            )
+            lines.append(
+                "    "
+                f"Frontier: {graph['frontier_total']} total  "
+                f"Runnable: {graph['frontier_runnable']}  "
+                f"Draft: {counts.get('draft', 0)}  "
+                f"Post-review: {counts.get('needs_post_review', 0)}  "
+                f"Needs repro: {counts.get('needs_repro', 0)}"
+            )
+        lines.append("")
 
     if state["total"] > 0:
         lines.append("  Experiments:")

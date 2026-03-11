@@ -55,3 +55,14 @@ def test_make_output_callback():
     record = json.loads(buf.getvalue().strip())
     assert record["event"] == "agent_output"
     assert record["detail"] == "[exp] Running experiment #1"
+
+
+def test_emit_assigns_monotonic_seq_and_high_precision_ts():
+    buf = StringIO()
+    logger = HeadlessLogger(stream=buf)
+    logger.emit("info", "init", "first")
+    logger.emit("info", "init", "second")
+
+    first, second = [json.loads(line) for line in buf.getvalue().strip().splitlines()]
+    assert second["seq"] == first["seq"] + 1
+    assert "." in first["ts"]

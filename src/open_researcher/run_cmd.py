@@ -1,4 +1,6 @@
-"""Run command — launch AI agents with interactive Textual TUI."""
+"""Run command — launch the research-v1 runtime with interactive Textual TUI."""
+
+from __future__ import annotations
 
 import threading
 from datetime import date
@@ -9,8 +11,12 @@ from rich.console import Console
 
 from open_researcher.agent_runtime import resolve_agent
 from open_researcher.agents import detect_agent, get_agent
-from open_researcher.config import load_config
-from open_researcher.log_output import make_safe_output as _make_safe_output
+from open_researcher.config import load_config, require_supported_protocol
+from open_researcher.graph_protocol import (
+    initialize_graph_runtime_state,
+    resolve_role_agent_name,
+)
+from open_researcher.parallel_runtime import run_parallel_experiment_batch
 from open_researcher.research_loop import (
     ResearchLoop,
 )
@@ -24,12 +30,10 @@ from open_researcher.research_loop import (
     set_paused as _set_paused,
 )
 from open_researcher.tui_runner import (
-    launch_dual_agent_runtime,
     print_exit_summary,
     run_tui_session,
     start_daemon,
 )
-from open_researcher.watchdog import TimeoutWatchdog
 from open_researcher.workflow_options import apply_worker_override
 
 console = Console()
@@ -46,12 +50,70 @@ def _resolve_agent(agent_name: str | None, agent_configs: dict | None = None):
     )
 
 
+def _overall_exit_code(exit_codes: dict[str, int], *, crash_limited: bool = False) -> int:
+    if crash_limited:
+        return int(exit_codes.get("exp", 1) or 1)
+    for key in ("scout", "manager", "critic", "exp"):
+        code = int(exit_codes.get(key, 0) or 0)
+        if code != 0:
+            return code
+    return 0
+
+
 def render_scout_program(research_dir: Path, tag: str, goal: str | None) -> None:
     """Render scout_program.md with optional goal."""
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
     template = env.get_template("scout_program.md.j2")
     content = template.render(tag=tag, goal=goal or "")
     (research_dir / "scout_program.md").write_text(content)
+
+
+def _resolve_scout_agent(cfg, *, primary_agent_name: str | None):
+    return _resolve_agent(
+        resolve_role_agent_name(cfg, "scout_agent", primary_agent_name),
+        cfg.agent_config,
+    )
+
+
+def _resolve_research_agents(
+    cfg,
+    *,
+    primary_agent_name: str | None,
+):
+    """Resolve manager/critic/experiment roles for research-v1."""
+    manager_agent = _resolve_agent(
+        resolve_role_agent_name(cfg, "manager_agent", primary_agent_name),
+        cfg.agent_config,
+    )
+    critic_agent = _resolve_agent(
+        resolve_role_agent_name(cfg, "critic_agent", primary_agent_name),
+        cfg.agent_config,
+    )
+    exp_agent = _resolve_agent(
+        resolve_role_agent_name(cfg, "experiment_agent", primary_agent_name),
+        cfg.agent_config,
+    )
+    return manager_agent, critic_agent, exp_agent
+
+
+def _build_parallel_runner(
+    *,
+    repo_path: Path,
+    research_dir: Path,
+    cfg,
+    exp_agent,
+    renderer,
+):
+    if cfg.max_workers == 1:
+        return None
+    return lambda **kwargs: run_parallel_experiment_batch(
+        repo_path,
+        research_dir,
+        cfg,
+        exp_agent,
+        renderer.make_output_callback("experimenting"),
+        **kwargs,
+    )
 
 
 def do_start_init(repo_path: Path, tag: str | None = None) -> Path:
@@ -70,103 +132,134 @@ def do_start_init(repo_path: Path, tag: str | None = None) -> Path:
     return research
 
 
-def do_run(repo_path: Path, agent_name: str | None, dry_run: bool) -> None:
-    """Single-agent mode — backward compatible."""
+def do_run(
+    repo_path: Path,
+    agent_name: str | None,
+    dry_run: bool,
+    workers: int | None = None,
+    max_experiments: int = 0,
+) -> int:
+    """Continue an existing research-v1 workflow in the TUI."""
     research = repo_path / ".research"
     if not research.is_dir():
         console.print("[red]Error:[/red] .research/ not found. Run 'open-researcher init' first.")
         raise SystemExit(1)
 
-    program_md = research / "program.md"
-    if not program_md.exists():
-        console.print("[red]Error:[/red] .research/program.md not found.")
-        raise SystemExit(1)
-
-    # Load config before agent resolution so agent_config is available
-    cfg = load_config(research)
-    agent = _resolve_agent(agent_name, cfg.agent_config)
+    cfg = apply_worker_override(load_config(research, strict=True), workers)
+    require_supported_protocol(cfg)
+    if max_experiments > 0:
+        cfg.max_experiments = max_experiments
+    initialize_graph_runtime_state(research, cfg)
+    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+        cfg,
+        primary_agent_name=agent_name,
+    )
 
     if dry_run:
-        console.print(f"[bold]Agent:[/bold] {agent.name}")
-        console.print(f"[bold]Command:[/bold] {' '.join(agent.build_command(program_md, repo_path))}")
+        console.print(f"[bold]Manager Agent:[/bold] {manager_agent.name}")
+        console.print(f"[bold]Critic Agent:[/bold] {critic_agent.name}")
+        console.print(f"[bold]Experiment Agent:[/bold] {exp_agent.name}")
+        console.print(
+            f"[bold]Command:[/bold] {' '.join(exp_agent.build_command(research / 'experiment_program.md', repo_path))}"
+        )
         console.print(f"[bold]Working directory:[/bold] {repo_path}")
-        console.print("\n[dim]Dry run -- no agent launched.[/dim]")
-        return
+        console.print("\n[dim]Dry run -- no runtime launched.[/dim]")
+        return 0
 
+    stop = threading.Event()
     exit_codes: dict[str, int] = {}
+    loop_ref: dict[str, ResearchLoop] = {}
 
     def setup(app, renderer):
-        del renderer
-        watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: agent.terminate())
-        on_output = _make_safe_output(app.append_exp_log, research / "run.log")
+        del app
+        assert renderer is not None
+        loop = ResearchLoop(
+            repo_path,
+            research,
+            cfg,
+            renderer.on_event,
+            has_pending_ideas_fn=_has_pending_ideas,
+            read_latest_status_fn=_read_latest_status,
+            pause_fn=_set_paused,
+        )
+        loop_ref["loop"] = loop
+        parallel_runner = _build_parallel_runner(
+            repo_path=repo_path,
+            research_dir=research,
+            cfg=cfg,
+            exp_agent=exp_agent,
+            renderer=renderer,
+        )
+        start_daemon(
+            lambda: exit_codes.update(
+                loop.run_graph_protocol(
+                    manager_agent,
+                    critic_agent,
+                    exp_agent,
+                    stop=stop,
+                    parallel_batch_runner=parallel_runner,
+                )
+            )
+        )
+        return [stop.set, manager_agent.terminate, critic_agent.terminate, exp_agent.terminate]
 
-        def _run_agent() -> None:
-            try:
-                code = agent.run(repo_path, on_output=on_output, program_file="program.md")
-            except Exception as exc:
-                on_output(f"[agent] Agent error: {exc}")
-                code = 1
-            exit_codes["agent"] = code
-
-        watchdog.start()
-        start_daemon(_run_agent)
-
-        cleanup = [watchdog.stop, agent.terminate]
-        if hasattr(on_output, "close"):
-            cleanup.insert(0, on_output.close)
-        return cleanup
-
-    run_tui_session(repo_path, multi=False, setup=setup)
-    print_exit_summary(console, exit_codes, [("agent", f"Agent {agent.name}")], show_missing=True)
+    run_tui_session(repo_path, research_dir=research, setup=setup)
+    print_exit_summary(
+        console,
+        exit_codes,
+        [
+            ("manager", "Research Manager"),
+            ("critic", "Research Critic"),
+            ("exp", "Experiment Agent"),
+        ],
+        show_missing=True,
+    )
 
     from open_researcher.status_cmd import print_status
 
     print_status(repo_path)
+    loop = loop_ref.get("loop")
+    return _overall_exit_code(
+        exit_codes,
+        crash_limited=bool(loop and loop.last_stop_reason == "crash_limit"),
+    )
 
 
 def do_start(
     repo_path: Path,
     agent_name: str | None = None,
     tag: str | None = None,
-    multi: bool = False,
-    idea_agent_name: str | None = None,
-    exp_agent_name: str | None = None,
     workers: int | None = None,
-) -> None:
-    """Bootstrap a research workflow: auto-init -> Scout -> Review -> Experiment."""
+    goal: str | None = None,
+    max_experiments: int = 0,
+) -> int:
+    """Bootstrap a research-v1 workflow: init -> Scout -> Review -> runtime."""
     from open_researcher.tui.modals import GoalInputModal
     from open_researcher.tui.review import ReviewScreen
 
     if tag is None:
         tag = date.today().strftime("%b%d").lower()
     research = do_start_init(repo_path, tag=tag)
-    cfg = apply_worker_override(load_config(research), workers)
-    use_multi_agent = bool(multi or idea_agent_name or exp_agent_name or workers is not None)
+    cfg = apply_worker_override(load_config(research, strict=True), workers)
+    require_supported_protocol(cfg)
+    if max_experiments > 0:
+        cfg.max_experiments = max_experiments
+    initialize_graph_runtime_state(research, cfg)
 
-    scout_agent = _resolve_agent(agent_name, cfg.agent_config)
-    if use_multi_agent:
-        idea_agent = _resolve_agent(idea_agent_name or agent_name, cfg.agent_config)
-        exp_agent = _resolve_agent(exp_agent_name or agent_name, cfg.agent_config)
-    else:
-        idea_agent = None
-        exp_agent = None
+    scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
+    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+        cfg,
+        primary_agent_name=agent_name,
+    )
 
     stop = threading.Event()
     exit_codes: dict[str, int] = {}
+    loop_ref: dict[str, ResearchLoop] = {}
 
     def setup(app, renderer):
         assert renderer is not None
         loop = ResearchLoop(repo_path, research, cfg, renderer.on_event)
-
-        def _on_review_result(result: str | None) -> None:
-            if result == "confirm":
-                app.app_phase = "experimenting"
-                _start_experiment_agents()
-            elif result == "reanalyze":
-                app.app_phase = "scouting"
-                _launch_scout()
-            else:
-                app.exit()
+        loop_ref["loop"] = loop
 
         def _show_review() -> None:
             app.push_screen(ReviewScreen(research), _on_review_result)
@@ -195,6 +288,36 @@ def do_start(
 
             start_daemon(_run_scout)
 
+        def _start_runtime() -> None:
+            parallel_runner = _build_parallel_runner(
+                repo_path=repo_path,
+                research_dir=research,
+                cfg=cfg,
+                exp_agent=exp_agent,
+                renderer=renderer,
+            )
+            start_daemon(
+                lambda: exit_codes.update(
+                    loop.run_graph_protocol(
+                        manager_agent,
+                        critic_agent,
+                        exp_agent,
+                        stop=stop,
+                        parallel_batch_runner=parallel_runner,
+                    )
+                )
+            )
+
+        def _on_review_result(result: str | None) -> None:
+            if result == "confirm":
+                app.app_phase = "experimenting"
+                _start_runtime()
+            elif result == "reanalyze":
+                app.app_phase = "scouting"
+                _launch_scout()
+            else:
+                app.exit()
+
         def _on_goal_result(goal: str | None) -> None:
             render_scout_program(research, tag=tag, goal=goal)
             if goal:
@@ -202,130 +325,40 @@ def do_start(
             app.app_phase = "scouting"
             _launch_scout()
 
-        def _start_experiment_agents() -> None:
-            if use_multi_agent and idea_agent and exp_agent:
-                launch_dual_agent_runtime(
-                    repo_path=repo_path,
-                    research_dir=research,
-                    cfg=cfg,
-                    loop=loop,
-                    renderer=renderer,
-                    idea_agent=idea_agent,
-                    exp_agent=exp_agent,
-                    stop=stop,
-                    exit_codes=exit_codes,
-                )
-                return
-
-            def _run_single():
-                exit_codes["agent"] = loop.run_single_agent(scout_agent)
-
-            start_daemon(_run_single)
-
-        app.push_screen(GoalInputModal(), _on_goal_result)
-
-        cleanup = [stop.set, scout_agent.terminate]
-        if idea_agent:
-            cleanup.append(idea_agent.terminate)
-        if exp_agent:
-            cleanup.append(exp_agent.terminate)
-        return cleanup
+        if goal is not None:
+            _on_goal_result(goal)
+        else:
+            app.push_screen(GoalInputModal(), _on_goal_result)
+        return [
+            stop.set,
+            scout_agent.terminate,
+            manager_agent.terminate,
+            critic_agent.terminate,
+            exp_agent.terminate,
+        ]
 
     run_tui_session(
         repo_path,
         research_dir=research,
-        multi=use_multi_agent,
         initial_phase="scouting",
         setup=setup,
     )
     print_exit_summary(
         console,
         exit_codes,
-        [("scout", "Scout"), ("idea", "Idea Agent"), ("exp", "Experiment Agent"), ("agent", "Agent")],
+        [
+            ("scout", "Scout"),
+            ("manager", "Research Manager"),
+            ("critic", "Research Critic"),
+            ("exp", "Experiment Agent"),
+        ],
     )
 
     from open_researcher.status_cmd import print_status
 
     print_status(repo_path)
-
-
-def do_run_multi(
-    repo_path: Path,
-    idea_agent_name: str | None,
-    exp_agent_name: str | None,
-    dry_run: bool,
-    workers: int | None = None,
-) -> None:
-    """Dual-agent mode — Idea Agent + Experiment Agent in parallel."""
-    research = repo_path / ".research"
-    if not research.is_dir():
-        console.print("[red]Error:[/red] .research/ not found. Run 'open-researcher init' first.")
-        raise SystemExit(1)
-
-    idea_program = research / "idea_program.md"
-    exp_program = research / "experiment_program.md"
-
-    for p in [idea_program, exp_program]:
-        if not p.exists():
-            console.print(f"[red]Error:[/red] {p.name} not found. Re-run 'open-researcher init'.")
-            raise SystemExit(1)
-
-    # Load config before agent resolution so agent_config is available
-    cfg = apply_worker_override(load_config(research), workers)
-    idea_agent = _resolve_agent(idea_agent_name, cfg.agent_config)
-    exp_agent = _resolve_agent(exp_agent_name, cfg.agent_config)
-
-    if dry_run:
-        console.print(f"[bold]Idea Agent:[/bold] {idea_agent.name}")
-        console.print(f"[bold]Experiment Agent:[/bold] {exp_agent.name}")
-        console.print(f"[bold]Working directory:[/bold] {repo_path}")
-        console.print("\n[dim]Dry run -- no agents launched.[/dim]")
-        return
-
-    # Ensure worktrees directory exists for parallel experiments
-    worktrees_dir = research / "worktrees"
-    worktrees_dir.mkdir(exist_ok=True)
-    stop = threading.Event()
-    exit_codes: dict[str, int] = {}
-
-    def setup(app, renderer):
-        del app
-        assert renderer is not None
-        loop = ResearchLoop(
-            repo_path,
-            research,
-            cfg,
-            renderer.on_event,
-            has_pending_ideas_fn=_has_pending_ideas,
-            read_latest_status_fn=_read_latest_status,
-            pause_fn=_set_paused,
-        )
-        launch_dual_agent_runtime(
-            repo_path=repo_path,
-            research_dir=research,
-            cfg=cfg,
-            loop=loop,
-            renderer=renderer,
-            idea_agent=idea_agent,
-            exp_agent=exp_agent,
-            stop=stop,
-            exit_codes=exit_codes,
-        )
-        return [stop.set, idea_agent.terminate, exp_agent.terminate]
-
-    run_tui_session(
-        repo_path,
-        research_dir=research,
-        multi=True,
-        setup=setup,
-    )
-    print_exit_summary(
-        console,
+    loop = loop_ref.get("loop")
+    return _overall_exit_code(
         exit_codes,
-        [("idea", "Idea Agent"), ("exp", "Experiment Agent")],
-        show_missing=True,
+        crash_limited=bool(loop and loop.last_stop_reason == "crash_limit"),
     )
-
-    from open_researcher.status_cmd import print_status
-
-    print_status(repo_path)

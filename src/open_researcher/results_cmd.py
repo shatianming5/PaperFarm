@@ -9,6 +9,13 @@ from rich.console import Console
 from rich.table import Table
 
 
+def _safe_float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def load_results(repo_path: Path) -> list[dict]:
     results_path = repo_path / ".research" / "results.tsv"
     if not results_path.exists():
@@ -88,22 +95,26 @@ def print_results_chart(repo_path: Path, metric: str | None = None, last: int | 
         metric_name = metric or "metric"
         direction = ""
 
-    values = []
-    statuses = []
-    for r in rows:
-        try:
-            values.append(float(r.get("metric_value", 0)))
-        except (ValueError, TypeError):
-            values.append(0)
+    x: list[int] = []
+    values: list[float] = []
+    statuses: list[str] = []
+    for idx, r in enumerate(rows, 1):
+        value = _safe_float(r.get("metric_value"))
+        if value is None:
+            continue
+        x.append(idx)
+        values.append(value)
         statuses.append(r.get("status", ""))
 
-    x = list(range(1, len(values) + 1))
+    if not values:
+        print("No valid numeric results to chart.")
+        return
 
     plt.clear_figure()
     plt.plot(x, values, marker="braille")
 
     # Colored scatter points by status
-    for status, color in [("keep", "green"), ("discard", "red"), ("crash", "yellow")]:
+    for status, color in [("keep", "green"), ("discard", "yellow"), ("crash", "red")]:
         sx = [x[i] for i, s in enumerate(statuses) if s == status]
         sy = [values[i] for i, s in enumerate(statuses) if s == status]
         if sx:

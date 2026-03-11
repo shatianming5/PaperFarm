@@ -20,8 +20,8 @@ def monitor(research_dir):
 
 
 def test_update_and_get(monitor, research_dir):
-    monitor.update("idea_agent", status="analyzing", detail="reviewing #7")
-    activity = monitor.get("idea_agent")
+    monitor.update("manager_agent", status="analyzing", detail="reviewing #7")
+    activity = monitor.get("manager_agent")
     assert activity["status"] == "analyzing"
     assert activity["detail"] == "reviewing #7"
     assert "updated_at" in activity
@@ -46,10 +46,10 @@ def test_update_experiment_agent(monitor):
 
 
 def test_get_all(monitor):
-    monitor.update("idea_agent", status="idle")
+    monitor.update("manager_agent", status="idle")
     monitor.update("experiment_agent", status="coding")
     all_act = monitor.get_all()
-    assert "idea_agent" in all_act
+    assert "manager_agent" in all_act
     assert "experiment_agent" in all_act
 
 

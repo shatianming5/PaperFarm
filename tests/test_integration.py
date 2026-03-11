@@ -26,7 +26,8 @@ def test_full_workflow():
 
         # 1. Init
         do_init(repo, tag="test1")
-        assert (repo / ".research" / "program.md").exists()
+        assert (repo / ".research" / "scout_program.md").exists()
+        assert (repo / ".research" / "manager_program.md").exists()
         assert (repo / ".research" / "scripts" / "record.py").exists()
 
         # 2. Simulate agent filling in config
@@ -97,8 +98,8 @@ def test_full_workflow():
         assert "increase LR" in report
 
 
-def test_multi_agent_init_creates_all_files(tmp_path):
-    """Verify init creates all files needed for multi-agent mode."""
+def test_research_v1_init_creates_all_runtime_files(tmp_path):
+    """Verify init creates all files needed for the research-v1 runtime."""
     import json as json_mod
 
     from open_researcher.init_cmd import do_init
@@ -107,16 +108,15 @@ def test_multi_agent_init_creates_all_files(tmp_path):
     do_init(repo_path=tmp_path, tag="test")
     research = tmp_path / ".research"
 
-    # Original files
-    assert (research / "program.md").exists()
     assert (research / "config.yaml").exists()
     assert (research / "results.tsv").exists()
 
-    # Multi-agent files
     assert (research / "idea_pool.json").exists()
     assert (research / "activity.json").exists()
     assert (research / "control.json").exists()
-    assert (research / "idea_program.md").exists()
+    assert (research / "scout_program.md").exists()
+    assert (research / "manager_program.md").exists()
+    assert (research / "critic_program.md").exists()
     assert (research / "experiment_program.md").exists()
 
     # Verify idea_pool.json structure

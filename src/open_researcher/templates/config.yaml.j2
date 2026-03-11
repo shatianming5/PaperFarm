@@ -32,13 +32,21 @@ environment: |
 research:
   web_search: true          # let agent use web search if available
   search_interval: 5        # refresh ideas every N experiments
+  protocol: research-v1     # normalized at load time; older protocol names auto-upgrade
+  manager_batch_size: 3     # frontier batch size for research-v1 manager
+  critic_repro_policy: best_or_surprising  # none | best_or_surprising | always
+
+memory:
+  ideation: true           # research-v1: keep long-horizon ideation memory
+  experiment: true         # research-v1: keep experiment/evidence memory
+  repo_type_prior: true    # research-v1: store repo-profile priors
 
 runtime:
   gpu_allocation: true      # advanced plugin: GPU scheduling/allocation
   failure_memory: true      # advanced plugin: rank historical fixes
   worktree_isolation: true  # advanced plugin: isolated git worktrees
 
-# GPU configuration (for multi-agent mode)
+# GPU configuration (for parallel experiment workers)
 gpu:
   # Remote hosts for GPU allocation (optional)
   # remote_hosts:
@@ -63,3 +71,11 @@ gpu:
 #     extra_flags: []                    # e.g., ["--no-git"]
 #   opencode:
 #     extra_flags: []
+
+# Optional role-to-agent overrides.
+# Empty values mean "use the primary --agent selection".
+# roles:
+#   scout_agent: ""
+#   manager_agent: ""
+#   critic_agent: ""
+#   experiment_agent: ""

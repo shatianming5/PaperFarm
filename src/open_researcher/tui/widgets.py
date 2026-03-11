@@ -79,6 +79,7 @@ class ExperimentStatusPanel(Static):
     def update_status(
         self, activity: dict | None, completed: int = 0, total: int = 0,
         phase: str = "",
+        role_label: str = "Experiment Agent",
     ) -> None:
         # Phase-specific rendering for scouting and reviewing
         if phase == "scouting":
@@ -101,7 +102,7 @@ class ExperimentStatusPanel(Static):
 
         status = activity.get("status", "idle")
         detail = escape(activity.get("detail", ""))
-        idea = escape(activity.get("idea", ""))
+        frontier = escape(activity.get("frontier_id", "") or activity.get("idea", ""))
 
         # Phase icon and color mapping
         phase_map: dict[str, tuple[str, str, str]] = {
@@ -124,10 +125,10 @@ class ExperimentStatusPanel(Static):
 
         lines: list[str] = []
         if phase == "experimenting":
-            lines.append(f"  [bold {C_SUCCESS}]Experiment Agent[/bold {C_SUCCESS}]")
+            lines.append(f"  [bold {C_SUCCESS}]{escape(role_label)}[/bold {C_SUCCESS}]")
         lines.append(f"  [{color}]{icon} \\[{label}][/{color}]")
-        if idea:
-            lines.append(f"     [bold]{idea}[/bold]")
+        if frontier:
+            lines.append(f"     [bold]{frontier}[/bold]")
         if detail:
             lines.append(f"     [dim]{detail}[/dim]")
 
@@ -137,47 +138,44 @@ class ExperimentStatusPanel(Static):
             filled = min(int(bar_width * completed / total), bar_width) if total else 0
             empty = bar_width - filled
             bar = "\u2588" * filled + "\u2591" * empty
-            lines.append(f"     [{color}]{bar}[/{color}]  {completed}/{total} ideas")
+            lines.append(f"     [{color}]{bar}[/{color}]  {completed}/{total} backlog items")
 
         self.status_text = "\n".join(lines)
 
 
-class IdeaListPanel(Static):
-    """Rich-formatted idea list — each idea is one colored line."""
+class ProjectedBacklogPanel(Static):
+    """Rich-formatted projected backlog list."""
 
-    ideas_text = reactive("", layout=True)
+    items_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.ideas_text or "[dim]No ideas yet[/dim]"
+        return self.items_text or "[dim]No projected backlog items yet[/dim]"
 
-    def update_ideas(self, ideas: list[dict]) -> None:
+    def update_items(self, ideas: list[dict]) -> None:
         if not ideas:
-            self.ideas_text = "[dim]No ideas yet[/dim]"
+            self.items_text = "[dim]No projected backlog items yet[/dim]"
             return
 
-        # Show ideas in chronological order (by id number) as a cycle history
         def _sort_key(i):
-            id_str = i.get("id", "idea-999")
-            try:
-                return int(id_str.split("-")[1])
-            except (IndexError, ValueError):
-                return 999999
+            return (
+                int(i.get("priority", 9999) or 9999),
+                str(i.get("id", "")),
+            )
         sorted_ideas = sorted(ideas, key=_sort_key)
 
         lines: list[str] = []
-        for cycle, idea in enumerate(sorted_ideas, 1):
+        for idea in sorted_ideas:
             sid = idea.get("status", "pending")
             result = idea.get("result")
             verdict = ""
             if result and isinstance(result, dict):
                 verdict = result.get("verdict", "")
 
-            # Truncate description and escape markup chars
             desc = escape(idea.get("description", ""))
             if len(desc) > 50:
                 desc = desc[:47] + "..."
+            item_label = escape(idea.get("frontier_id", "") or idea.get("id", "item"))
 
-            # Build result string
             if sid == "running":
                 icon = f"[bold {C_WARNING}]\u25b6[/bold {C_WARNING}]"
                 result_str = f"[bold {C_WARNING}]running...[/bold {C_WARNING}]"
@@ -213,10 +211,21 @@ class IdeaListPanel(Static):
                 icon = "[dim]?[/dim]"
                 result_str = f"[dim]{sid}[/dim]"
 
-            line = f"  {icon} [bold]Cycle {cycle}[/bold] | {desc}  \u2192 {result_str}"
+            line = f"  {icon} [bold]{item_label}[/bold] | {desc}  \u2192 {result_str}"
             lines.append(line)
 
-        self.ideas_text = "\n".join(lines)
+        self.items_text = "\n".join(lines)
+
+    def update_ideas(self, ideas: list[dict]) -> None:
+        self.update_items(ideas)
+
+
+class IdeaListPanel(ProjectedBacklogPanel):
+    """Backward-compatible alias for tests/imports."""
+
+    @property
+    def ideas_text(self) -> str:
+        return self.items_text
 
 
 class HotkeyBar(Static):
@@ -240,8 +249,7 @@ class HotkeyBar(Static):
         else:
             keys.append(f"[bold {C_INFO}]\\[p][/bold {C_INFO}][{C_DIM}]ause[/{C_DIM}]")
         if phase == "experimenting":
-            keys.append(f"[bold {C_INFO}]\\[s][/bold {C_INFO}][{C_DIM}]kip[/{C_DIM}]")
-            keys.append(f"[bold {C_INFO}]\\[a][/bold {C_INFO}][{C_DIM}]dd idea[/{C_DIM}]")
+            keys.append(f"[bold {C_INFO}]\\[s][/bold {C_INFO}][{C_DIM}]kip item[/{C_DIM}]")
         keys.append(f"[bold {C_INFO}]\\[g][/bold {C_INFO}][{C_DIM}]pu[/{C_DIM}]")
         keys.append(f"[bold {C_INFO}]\\[q][/bold {C_INFO}][{C_DIM}]uit[/{C_DIM}]")
         if paused:
@@ -353,22 +361,21 @@ class RecentExperiments(Static):
 
 
 def render_ideas_markdown(ideas: list[dict]) -> str:
-    """将 idea_pool 数据渲染为 Markdown 表格（纯计算，无 I/O）。"""
+    """Render the projected backlog as Markdown."""
     if not ideas:
-        return "# Idea Backlog\n\n*No ideas yet.*\n"
+        return "# Projected Backlog\n\n*No projected backlog items yet.*\n"
 
     def _sort_key(i):
-        id_str = i.get("id", "idea-999")
-        try:
-            return int(id_str.split("-")[1])
-        except (IndexError, ValueError):
-            return 999999
+        return (
+            int(i.get("priority", 9999) or 9999),
+            str(i.get("id", "")),
+        )
 
     lines = [
-        "# Idea Backlog",
+        "# Projected Backlog",
         "",
-        "| # | Idea | Category | Priority | Status | Result |",
-        "|---|------|----------|----------|--------|--------|",
+        "| Item | Frontier | Description | Category | Priority | Status | Result |",
+        "|------|----------|-------------|----------|----------|--------|--------|",
     ]
 
     counts: dict[str, int] = {}
@@ -377,6 +384,7 @@ def render_ideas_markdown(ideas: list[dict]) -> str:
         counts[status] = counts.get(status, 0) + 1
 
         num = idea.get("id", "?")
+        frontier = idea.get("frontier_id", "").replace("|", "\\|")
         desc = idea.get("description", "").replace("|", "\\|")
         if len(desc) > 60:
             desc = desc[:57] + "..."
@@ -399,10 +407,11 @@ def render_ideas_markdown(ideas: list[dict]) -> str:
             result_str = ""
         result_str = result_str.replace("|", "\\|")
 
-        lines.append(f"| {num} | {desc} | {cat} | {pri} | {status} | {result_str} |")
+        item_label = num.replace("|", "\\|")
+        lines.append(f"| {item_label} | {frontier} | {desc} | {cat} | {pri} | {status} | {result_str} |")
 
     parts = [f"{counts.get(s, 0)} {s}" for s in ("pending", "running", "done", "skipped") if counts.get(s)]
-    lines.append(f"\n**Summary**: {', '.join(parts)}, {len(ideas)} total")
+    lines.append(f"\n**Summary**: {', '.join(parts)}, {len(ideas)} total projected backlog items")
     return "\n".join(lines)
 
 
@@ -423,10 +432,16 @@ class DocViewer(Static):
         "project-understanding.md",
         "literature.md",
         "evaluation.md",
-        "ideas.md",
+        "research-strategy.md",
+        "manager_program.md",
+        "critic_program.md",
+        "experiment_program.md",
+        "projected_backlog.md",
+        "research_graph.md",
+        "research_memory.md",
     ]
 
-    DYNAMIC_FILES = {"ideas.md"}
+    DYNAMIC_FILES = {"projected_backlog.md", "research_graph.md", "research_memory.md"}
 
     def __init__(self, research_dir=None, **kwargs):
         super().__init__(**kwargs)
@@ -463,22 +478,65 @@ class DocViewer(Static):
 
     def _read_dynamic(self, filename: str) -> str:
         """Generate dynamic content for special files."""
-        if filename == "ideas.md":
+        if filename == "projected_backlog.md":
             try:
                 from open_researcher.idea_pool import IdeaBacklog
                 pool = IdeaBacklog(self.research_dir / "idea_pool.json")
                 return render_ideas_markdown(pool.all_ideas())
             except Exception:
-                logger.debug("Error reading idea pool for ideas.md", exc_info=True)
-                return "# Idea Backlog\n\n*Error loading ideas.*\n"
+                logger.debug("Error reading projected backlog", exc_info=True)
+                return "# Projected Backlog\n\n*Error loading projected backlog.*\n"
+        if filename == "research_graph.md":
+            return self._render_json_markdown(
+                title="Research Graph",
+                source_file="research_graph.json",
+            )
+        if filename == "research_memory.md":
+            return self._render_json_markdown(
+                title="Research Memory",
+                source_file="research_memory.json",
+            )
         return ""
+
+    def _render_json_markdown(self, *, title: str, source_file: str) -> str:
+        path = self.research_dir / source_file
+        if not path.exists():
+            return f"# {title}\n\n*File not found: {source_file}*\n"
+        try:
+            import json
+
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.debug("Error reading %s", source_file, exc_info=True)
+            return f"# {title}\n\n*Error loading {source_file}.*\n"
+
+        if source_file == "research_graph.json":
+            summary = [
+                f"- hypotheses: {len(payload.get('hypotheses', []))}",
+                f"- experiment_specs: {len(payload.get('experiment_specs', []))}",
+                f"- frontier: {len(payload.get('frontier', []))}",
+                f"- evidence: {len(payload.get('evidence', []))}",
+                f"- claim_updates: {len(payload.get('claim_updates', []))}",
+            ]
+        else:
+            summary = [
+                f"- repo_type_priors: {len(payload.get('repo_type_priors', []))}",
+                f"- ideation_memory: {len(payload.get('ideation_memory', []))}",
+                f"- experiment_memory: {len(payload.get('experiment_memory', []))}",
+            ]
+        pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+        return f"# {title}\n\n" + "\n".join(summary) + f"\n\n```json\n{pretty}\n```\n"
 
     def _get_file_mtime(self, filename: str) -> float:
         """Get modification time for change detection."""
         if not self.research_dir:
             return 0.0
-        if filename == "ideas.md":
+        if filename == "projected_backlog.md":
             pool_path = self.research_dir / "idea_pool.json"
+        elif filename == "research_graph.md":
+            pool_path = self.research_dir / "research_graph.json"
+        elif filename == "research_memory.md":
+            pool_path = self.research_dir / "research_memory.json"
         else:
             pool_path = self.research_dir / filename
         try:

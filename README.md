@@ -30,7 +30,7 @@
 
 - **🛡️ Safety First**: Every experiment is an isolated git commit. Failed experiments auto-rollback. Timeout watchdog, crash counter, and max-experiments limit keep things under control.
 
-- **🔄 Dual-Agent Mode**: Separate Idea Agent (generates hypotheses) and Experiment Agent (implements & evaluates) for structured research workflows.
+- **🧭 Research-v1 Runtime**: A single `Scout -> Manager -> Critic -> Experiment` loop keeps research state explicit and reviewable.
 
 - **📡 Headless Mode**: Run without TUI — outputs structured JSON Lines to stdout, perfect for scripts, CI, or monitoring with external tools.
 
@@ -100,18 +100,20 @@ Open Researcher generates a `.research/` directory in your repo with everything 
 
 | File | Purpose |
 |:---|:---|
-| `program.md` | Agent instructions — the full research workflow |
 | `scout_program.md` | Scout agent instructions — project analysis phase |
-| `idea_program.md` | Idea agent instructions — hypothesis generation |
+| `manager_program.md` | Research manager instructions — hypothesis and frontier policy |
+| `critic_program.md` | Research critic instructions — falsification and evidence review |
 | `experiment_program.md` | Experiment agent instructions — run & evaluate |
 | `config.yaml` | Mode, metrics, timeout, experiment limits, agent settings |
 | `project-understanding.md` | Agent fills: what the project does |
 | `research-strategy.md` | Agent fills: research direction and focus areas |
 | `literature.md` | Agent fills: related work and prior art |
 | `evaluation.md` | Agent fills: how to measure improvement |
-| `idea_pool.json` | Idea backlog with priority, status, and optional parallel-worker claim/assignment metadata |
+| `idea_pool.json` | Projected experiment backlog with priority, status, and worker claim metadata |
 | `results.tsv` | Experiment log (timestamp, commit, metrics, status) |
 | `events.jsonl` | Canonical runtime event stream for research + control |
+| `research_graph.json` | Canonical hypothesis / experiment / evidence graph |
+| `research_memory.json` | Repo prior, ideation, and experiment memory |
 | `control.json` | Compatibility snapshot of pause/resume/skip state |
 | `activity.json` | Real-time agent status for TUI display |
 
@@ -138,12 +140,12 @@ Phase 3: Human Review (TUI only, auto-confirmed in headless)
   ├─ Review all Scout outputs
   └─ Confirm, edit, or re-analyze
 
-Phase 4: Experiment Loop
-  ├─ Single-Agent: runs full program.md
-  └─ Research Loop (--workers N):
-     ├─ Internal idea generation proposes hypotheses → idea_pool.json
-     ├─ Internal experiment execution implements, tests, evaluates → results.tsv
-     └─ Repeat until no ideas left or --max-experiments reached
+Phase 4: Research-v1 Loop
+  ├─ Manager proposes/refines hypotheses and frontier rows
+  ├─ Critic reviews experiment specs before execution
+  ├─ Experiment agent implements, tests, and evaluates → results.tsv
+  ├─ Critic records evidence and claim updates into research_graph.json
+  └─ Repeat until no runnable frontier remains or --max-experiments reached
 ```
 
 Each experiment is a git commit. Successful experiments stay; failed ones are rolled back. Everything is logged in `results.tsv`.
@@ -290,7 +292,7 @@ make lint   # run linter
 |:---|:---|
 | `run` | Primary command: bootstrap if needed, otherwise run the existing workflow |
 | `run --mode headless --goal "..." --max-experiments N` | Headless JSON Lines mode |
-| `run --workers N` | Hide internal agent split and set experiment worker count |
+| `run --workers N` | Set experiment worker count for serial or parallel execution |
 | `start` | Legacy alias for bootstrap mode |
 | `init [--tag NAME]` | Initialize `.research/` directory |
 | `demo` | Try the TUI with sample data (no agent needed) |
@@ -375,7 +377,7 @@ runtime:
   worktree_isolation: true    # advanced plugin: isolated git worktrees
 
 gpu:
-  remote_hosts: []            # for multi-agent GPU allocation
+  remote_hosts: []            # optional remote GPU allocation hosts
 
 agents:                       # per-agent overrides (optional)
   claude-code:

@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+import threading
 
 from open_researcher.agents import get_agent
 from open_researcher.config import ResearchConfig
 from open_researcher.failure_memory import FailureMemoryLedger
 from open_researcher.gpu_manager import GPUManager
-from open_researcher.research_loop import has_pending_ideas
-from open_researcher.watchdog import TimeoutWatchdog
 from open_researcher.worker_plugins import (
     FailureMemoryPlugin,
     GPUAllocatorPlugin,
@@ -75,29 +73,47 @@ def build_parallel_worker_plugins(
     return profile, plugins
 
 
-def run_parallel_worker_loop(
+def run_parallel_experiment_batch(
     repo_path: Path,
     research_dir: Path,
     cfg: ResearchConfig,
-    idea_agent,
     exp_agent,
     on_output: Callable[[str], None],
     *,
     stop: threading.Event | None = None,
+    max_claims: int | None = None,
+    on_experiment_started: Callable[[dict], None] | None = None,
+    on_experiment_finished: Callable[[dict], bool | None] | None = None,
 ) -> dict[str, int]:
-    """Run advanced multi-worker experiment execution until ideas are exhausted."""
+    """Run one parallel batch against the current compatibility idea pool."""
     from open_researcher.idea_pool import IdeaPool
     from open_researcher.worker import WorkerManager
 
-    stop_event = stop or threading.Event()
-    exit_codes: dict[str, int] = {}
     idea_pool = IdeaPool(research_dir / "idea_pool.json")
-    watchdog = TimeoutWatchdog(cfg.timeout, on_timeout=lambda: exp_agent.terminate())
+    before = idea_pool.summary()
     profile, plugins = build_parallel_worker_plugins(repo_path, research_dir, cfg)
+    batch_started = 0
+    batch_finished = 0
+    failed_runs = 0
 
     def agent_factory():
         name = cfg.worker_agent or exp_agent.name
         return get_agent(name, config=cfg.agent_config.get(name))
+
+    def _on_started(idea: dict) -> None:
+        nonlocal batch_started
+        batch_started += 1
+        if on_experiment_started is not None:
+            on_experiment_started(idea)
+
+    def _on_finished(idea: dict) -> bool:
+        nonlocal batch_finished, failed_runs
+        batch_finished += 1
+        if int(idea.get("exit_code", 0) or 0) != 0:
+            failed_runs += 1
+        if on_experiment_finished is not None:
+            return bool(on_experiment_finished(idea))
+        return False
 
     wm = WorkerManager(
         repo_path=repo_path,
@@ -108,43 +124,32 @@ def run_parallel_worker_loop(
         max_workers=cfg.max_workers,
         on_output=on_output,
         runtime_plugins=plugins,
+        stop_event=stop,
+        max_claims=max_claims,
+        on_experiment_started=_on_started,
+        on_experiment_finished=_on_finished,
     )
 
-    cycle = 0
-    try:
-        on_output(
-            "[system] Parallel runtime profile "
-            f"{profile.name} (gpu={profile.gpu_allocation}, "
-            f"failure_memory={profile.failure_memory}, "
-            f"worktree={profile.worktree_isolation})"
-        )
-        while not stop_event.is_set():
-            cycle += 1
-            on_output(f"[system] === Cycle {cycle}: Starting Idea Agent ===")
-            try:
-                code = idea_agent.run(
-                    repo_path, on_output=on_output, program_file="idea_program.md"
-                )
-            except Exception as exc:
-                on_output(f"[idea] Agent error: {exc}")
-                code = 1
-            exit_codes["idea"] = code
+    on_output(
+        "[system] Parallel experiment batch "
+        f"{profile.name} (gpu={profile.gpu_allocation}, "
+        f"failure_memory={profile.failure_memory}, "
+        f"worktree={profile.worktree_isolation})"
+    )
 
-            if not has_pending_ideas(research_dir):
-                on_output("[system] No pending ideas after idea agent. Stopping.")
-                break
+    if before.get("pending", 0) <= 0:
+        return {"experiments_completed": 0, "exit_code": 0, "failed_runs": 0, "started_runs": 0}
 
-            on_output(f"[system] Launching {cfg.max_workers} parallel workers...")
-            watchdog.reset()
-            wm.start()
-            wm.join()
-            watchdog.stop()
-
-            if not has_pending_ideas(research_dir):
-                on_output("[system] All ideas processed.")
-                break
-    finally:
-        watchdog.stop()
-
-    on_output("[system] Parallel execution finished.")
-    return exit_codes
+    wm.start()
+    wm.join()
+    after = idea_pool.summary()
+    fatal_errors = wm.fatal_errors
+    running_after = int(after.get("running", 0) or 0)
+    return {
+        "experiments_completed": batch_finished,
+        "exit_code": 1 if failed_runs > 0 or fatal_errors > 0 or running_after > 0 else 0,
+        "failed_runs": failed_runs,
+        "started_runs": batch_started,
+        "fatal_errors": fatal_errors,
+        "running_after": running_after,
+    }

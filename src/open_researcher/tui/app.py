@@ -17,12 +17,12 @@ from open_researcher.activity import ActivityMonitor
 from open_researcher.control_plane import issue_control_command, read_control
 from open_researcher.idea_pool import IdeaBacklog
 from open_researcher.status_cmd import parse_research_state
-from open_researcher.tui.modals import AddIdeaModal, GPUStatusModal, LogScreen
+from open_researcher.tui.modals import GPUStatusModal, LogScreen
 from open_researcher.tui.widgets import (
     DocViewer,
     ExperimentStatusPanel,
+    ProjectedBacklogPanel,
     HotkeyBar,
-    IdeaListPanel,
     MetricChart,
     RecentExperiments,
     StatsBar,
@@ -38,14 +38,13 @@ class ResearchApp(App):
 
     BINDINGS = [
         ("1", "switch_tab('tab-overview')", "Overview"),
-        ("2", "switch_tab('tab-ideas')", "Ideas"),
+        ("2", "switch_tab('tab-backlog')", "Backlog"),
         ("3", "switch_tab('tab-charts')", "Charts"),
         ("4", "switch_tab('tab-logs')", "Logs"),
         ("5", "switch_tab('tab-docs')", "Docs"),
         ("p", "pause", "Pause"),
         ("r", "resume", "Resume"),
-        ("s", "skip", "Skip idea"),
-        ("a", "add_idea", "Add idea"),
+        ("s", "skip", "Skip item"),
         ("g", "gpu_status", "GPU status"),
         ("l", "view_log", "View log"),
         ("q", "quit_app", "Quit"),
@@ -53,11 +52,10 @@ class ResearchApp(App):
 
     app_phase: reactive[str] = reactive("experimenting")
 
-    def __init__(self, repo_path: Path, multi: bool = False, on_ready=None, initial_phase: str = "experimenting"):
+    def __init__(self, repo_path: Path, on_ready=None, initial_phase: str = "experimenting"):
         super().__init__()
         self.repo_path = repo_path
         self.research_dir = repo_path / ".research"
-        self.multi = multi
         self.pool = IdeaBacklog(self.research_dir / "idea_pool.json")
         self.activity = ActivityMonitor(self.research_dir)
         self._on_ready = on_ready
@@ -72,9 +70,9 @@ class ResearchApp(App):
             with TabPane("Overview", id="tab-overview"):
                 yield ExperimentStatusPanel(id="exp-status")
                 yield RecentExperiments(id="recent-exp")
-            with TabPane("Ideas", id="tab-ideas"):
-                with ScrollableContainer(id="idea-scroll"):
-                    yield IdeaListPanel(id="idea-list")
+            with TabPane("Backlog", id="tab-backlog"):
+                with ScrollableContainer(id="backlog-scroll"):
+                    yield ProjectedBacklogPanel(id="backlog-list")
             with TabPane("Charts", id="tab-charts"):
                 yield MetricChart(id="metric-chart")
             with TabPane("Logs", id="tab-logs"):
@@ -142,22 +140,24 @@ class ResearchApp(App):
             try:
                 self._state_cache = parse_research_state(self.repo_path)
                 self._state_cache_time = now
-            except (json.JSONDecodeError, OSError, KeyError):
+            except Exception:
                 logger.debug("Error parsing research state", exc_info=True)
         state = self._state_cache
 
         ideas: list[dict] = []
         try:
             ideas = self.pool.all_ideas()
-        except (json.JSONDecodeError, OSError, KeyError):
+        except Exception:
             logger.debug("Error reading idea pool", exc_info=True)
 
         exp_act = None
-        idea_act = None
+        manager_act = None
+        critic_act = None
         try:
             exp_act = self.activity.get("experiment_agent")
-            idea_act = self.activity.get("idea_agent")
-        except (json.JSONDecodeError, OSError, KeyError):
+            manager_act = self.activity.get("manager_agent") or self.activity.get("idea_agent")
+            critic_act = self.activity.get("critic_agent")
+        except Exception:
             logger.debug("Error reading activity", exc_info=True)
 
         rows: list[dict] = []
@@ -169,7 +169,7 @@ class ResearchApp(App):
 
         try:
             self.call_from_thread(
-                self._apply_refresh_data, paused, state, ideas, exp_act, idea_act, rows,
+                self._apply_refresh_data, paused, state, ideas, exp_act, manager_act, critic_act, rows,
             )
         except RuntimeError:
             pass  # App already closed
@@ -180,7 +180,8 @@ class ResearchApp(App):
         state: dict | None,
         ideas: list[dict],
         exp_act: dict | None,
-        idea_act: dict | None,
+        manager_act: dict | None,
+        critic_act: dict | None,
         rows: list[dict],
     ) -> None:
         """UI thread: apply pre-fetched data to widgets (no I/O)."""
@@ -195,19 +196,26 @@ class ResearchApp(App):
         completed = 0
         total = len(ideas)
         try:
-            self.query_one("#idea-list", IdeaListPanel).update_ideas(ideas)
+            self.query_one("#backlog-list", ProjectedBacklogPanel).update_items(ideas)
             completed = sum(1 for i in ideas if i.get("status") in ("done", "skipped"))
         except NoMatches:
-            logger.debug("Error refreshing idea list", exc_info=True)
+            logger.debug("Error refreshing projected backlog", exc_info=True)
 
         try:
-            active = (
-                exp_act
-                if exp_act and exp_act.get("status") not in (None, "idle")
-                else idea_act
-            )
+            active = None
+            role_label = "Experiment Agent"
+            if exp_act and exp_act.get("status") not in (None, "idle"):
+                active = exp_act
+                role_label = "Experiment Agent"
+            elif manager_act and manager_act.get("status") not in (None, "idle"):
+                active = manager_act
+                role_label = "Research Manager"
+            elif critic_act and critic_act.get("status") not in (None, "idle"):
+                active = critic_act
+                role_label = "Research Critic"
             self.query_one("#exp-status", ExperimentStatusPanel).update_status(
                 active, completed, total, phase=self.app_phase,
+                role_label=role_label,
             )
         except NoMatches:
             logger.debug("Error refreshing experiment status", exc_info=True)
@@ -269,21 +277,7 @@ class ResearchApp(App):
 
     def action_skip(self) -> None:
         self._write_control_command("skip_current")
-        self.notify("Skipping current idea")
-
-    def action_add_idea(self) -> None:
-        def on_result(result: dict | None) -> None:
-            if result:
-                desc = result.get("description", "")
-                self.pool.add(
-                    desc,
-                    source="user",
-                    category=result.get("category", "general"),
-                    priority=result.get("priority", 5),
-                )
-                self.notify(f"Added idea: {desc[:40]}")
-
-        self.push_screen(AddIdeaModal(), on_result)
+        self.notify("Skipping current frontier item")
 
     def action_gpu_status(self) -> None:
         gpu_path = self.research_dir / "gpu_status.json"

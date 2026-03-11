@@ -20,7 +20,37 @@ from open_researcher.research_events import (
 
 def now_iso() -> str:
     """Return the standard UTC timestamp used in JSONL event logs."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _coerce_seq(record: dict) -> int | None:
+    raw = record.get("seq")
+    try:
+        seq = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return seq if seq > 0 else None
+
+
+def next_seq_unlocked(path: Path) -> int:
+    """Compute the next global event sequence under an external file lock."""
+    if not path.exists():
+        return 1
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 1
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        seq = _coerce_seq(record)
+        if seq is not None:
+            return seq + 1
+    return 1
 
 
 class EventJournal:
@@ -33,16 +63,18 @@ class EventJournal:
 
     def emit(self, level: str, phase: str, event: str, **kwargs) -> dict:
         """Write one structured event record."""
-        record = {
-            "ts": now_iso(),
-            "level": level,
-            "phase": phase,
-            "event": event,
-            **kwargs,
-        }
-        line = json.dumps(record, ensure_ascii=False)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
+            seq = self._next_seq_unlocked()
+            record = {
+                "seq": seq,
+                "ts": now_iso(),
+                "level": level,
+                "phase": phase,
+                "event": event,
+                **kwargs,
+            }
+            line = json.dumps(record, ensure_ascii=False)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
 
@@ -50,6 +82,9 @@ class EventJournal:
             self._stream.write(line + "\n")
             self._stream.flush()
         return record
+
+    def _next_seq_unlocked(self) -> int:
+        return next_seq_unlocked(self.path)
 
     def emit_typed(self, event: ResearchEvent) -> dict:
         """Write a typed research event using the standard mapping."""

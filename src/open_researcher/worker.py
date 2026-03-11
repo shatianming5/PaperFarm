@@ -2,15 +2,17 @@
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
 from open_researcher.activity import ActivityMonitor
+from open_researcher.control_plane import consume_skip_current, read_control
 from open_researcher.gpu_manager import GPUManager
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.worker_plugins import (
     WorkerRuntimePlugins,
-    build_legacy_worker_plugins,
+    build_default_worker_plugins,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,10 @@ class WorkerManager:
         max_workers: int,
         on_output: Callable[[str], None],
         runtime_plugins: WorkerRuntimePlugins | None = None,
+        stop_event: threading.Event | None = None,
+        max_claims: int | None = None,
+        on_experiment_started: Callable[[dict], None] | None = None,
+        on_experiment_finished: Callable[[dict], bool | None] | None = None,
     ):
         self.repo_path = repo_path
         self.research_dir = research_dir
@@ -37,13 +43,21 @@ class WorkerManager:
         self.max_workers = max_workers
         self.on_output = on_output
         self._stop = threading.Event()
+        self._external_stop = stop_event
         self._workers: list[threading.Thread] = []
         self._activity = ActivityMonitor(research_dir)
-        self._plugins = runtime_plugins or build_legacy_worker_plugins(
+        self._plugins = runtime_plugins or build_default_worker_plugins(
             repo_path=repo_path,
             research_dir=research_dir,
             gpu_manager=gpu_manager,
         )
+        self._max_claims = max_claims if max_claims and max_claims > 0 else None
+        self._claims_started = 0
+        self._claim_lock = threading.Lock()
+        self._on_experiment_started = on_experiment_started
+        self._on_experiment_finished = on_experiment_finished
+        self._fatal_errors = 0
+        self._fatal_lock = threading.Lock()
 
     def start(self) -> None:
         """Start worker threads based on available GPUs."""
@@ -68,132 +82,231 @@ class WorkerManager:
         """Signal all workers to stop."""
         self._stop.set()
 
+    def _should_stop(self) -> bool:
+        return self._stop.is_set() or (self._external_stop is not None and self._external_stop.is_set())
+
+    def _reserve_claim_slot(self) -> bool:
+        if self._max_claims is None:
+            return True
+        with self._claim_lock:
+            if self._claims_started >= self._max_claims:
+                return False
+            self._claims_started += 1
+            return True
+
+    def _release_claim_slot(self) -> None:
+        if self._max_claims is None:
+            return
+        with self._claim_lock:
+            self._claims_started = max(self._claims_started - 1, 0)
+
     def join(self, timeout: float | None = None) -> None:
         """Wait for all worker threads to finish."""
         for t in self._workers:
             t.join(timeout=timeout)
 
+    @property
+    def fatal_errors(self) -> int:
+        with self._fatal_lock:
+            return self._fatal_errors
+
+    def _record_fatal_error(self) -> None:
+        with self._fatal_lock:
+            self._fatal_errors += 1
+
+    def _wait_until_unpaused(self) -> bool:
+        while not self._should_stop():
+            ctrl = read_control(self.research_dir / "control.json")
+            if not bool(ctrl.get("paused", False)):
+                return True
+            time.sleep(0.2)
+        return False
+
     def _worker_loop(self, worker_id: int, gpu: dict | None) -> None:
         wid = f"worker-{worker_id}"
-        allocation = (
-            self._plugins.gpu_allocator.allocate(wid, gpu)
-            if self._plugins.gpu_allocator is not None
-            else None
-        )
-        gpu_env = allocation.env if allocation is not None else {}
-        for line in allocation.log_lines if allocation is not None else []:
-            self.on_output(line)
-
-        while not self._stop.is_set():
-            idea = self.idea_pool.claim_idea(wid)
-            if not idea:
-                self.on_output(f"[{wid}] No more pending ideas, stopping")
-                break
-
-            idea_description = str(idea.get("description", ""))
-            claim_token = str(idea.get("claim_token", "")).strip()
-            memory_context = (
-                self._plugins.failure_memory.prepare(idea_description, wid)
-                if self._plugins.failure_memory is not None
+        allocation = None
+        try:
+            allocation = (
+                self._plugins.gpu_allocator.allocate(wid, gpu)
+                if self._plugins.gpu_allocator is not None
                 else None
             )
-            failure_class = (
-                memory_context.failure_class if memory_context is not None else "general_failure"
-            )
-            ranked_fix_actions = (
-                memory_context.ranked_fix_actions if memory_context is not None else []
-            )
-            first_fix_action = (
-                memory_context.first_fix_action if memory_context is not None else "generate_new_plan"
-            )
-            for line in memory_context.log_lines if memory_context is not None else []:
+            gpu_env = allocation.env if allocation is not None else {}
+            for line in allocation.log_lines if allocation is not None else []:
                 self.on_output(line)
 
-            self._activity.update_worker(
-                "experiment_agent",
-                wid,
-                status="running",
-                idea=idea_description[:50],
-                failure_class=failure_class,
-                memory_policy="rank_historical_success" if memory_context is not None else "disabled",
-                ranked_fixes=ranked_fix_actions[:3],
-                first_fix_action=first_fix_action,
-            )
-            self.on_output(f"[{wid}] Running: {idea_description[:60]}")
-            if gpu_env:
-                self.on_output(f"[{wid}] Using GPU env: {gpu_env}")
+            while not self._should_stop():
+                if not self._wait_until_unpaused():
+                    break
+                if not self._reserve_claim_slot():
+                    self.on_output(f"[{wid}] Claim budget exhausted, stopping")
+                    break
+                idea = self.idea_pool.claim_idea(wid)
+                if not idea:
+                    self._release_claim_slot()
+                    self.on_output(f"[{wid}] No more pending ideas, stopping")
+                    break
 
-            workspace = (
-                self._plugins.workspace_isolation.acquire(wid, str(idea["id"]))
-                if self._plugins.workspace_isolation is not None
-                else None
-            )
-            workdir = workspace.workdir if workspace is not None else self.repo_path
-            for line in workspace.log_lines if workspace is not None else []:
-                self.on_output(line)
+                idea_description = str(idea.get("description", ""))
+                claim_token = str(idea.get("claim_token", "")).strip()
+                if self._on_experiment_started is not None:
+                    try:
+                        self._on_experiment_started(dict(idea))
+                    except Exception:
+                        logger.debug("Experiment start callback failed", exc_info=True)
 
-            # Create agent and run in isolated worktree
-            agent = self.agent_factory()
-            run_code = 1
-            try:
-                run_env = {
-                    **gpu_env,
-                    "OPEN_RESEARCHER_MEMORY_POLICY": (
-                        "rank_historical_success" if memory_context is not None else "disabled"
-                    ),
-                    "OPEN_RESEARCHER_FAILURE_CLASS": failure_class,
-                    "OPEN_RESEARCHER_RANKED_FIXES": ",".join(ranked_fix_actions[:3]),
-                    "OPEN_RESEARCHER_FIRST_FIX_ACTION": first_fix_action,
-                }
-                code = agent.run(
-                    workdir,
-                    on_output=self.on_output,
-                    program_file="experiment_program.md",
-                    env=run_env,
-                )
-                run_code = int(code)
-                if code == 0:
-                    applied = self.idea_pool.mark_done(
-                        idea["id"],
-                        metric_value=None,
-                        verdict="completed",
-                        claim_token=claim_token or None,
-                    )
-                    if not applied:
-                        self.on_output(
-                            f"[{wid}] Claim race detected for {idea['id']}; winner already finalized, cleanup applied"
+                memory_context = None
+                workspace = None
+                workdir = self.repo_path
+                run_code = 1
+                notify_finished = True
+                try:
+                    if not self._wait_until_unpaused():
+                        applied = self.idea_pool.update_status(
+                            idea["id"], "pending", claim_token=claim_token or None
                         )
-                else:
+                        if not applied:
+                            self.on_output(f"[{wid}] Stop requested while pausing; claim release skipped")
+                        notify_finished = False
+                        break
+
+                    if consume_skip_current(self.research_dir / "control.json", source=f"{wid}:runtime"):
+                        self.on_output(f"[{wid}] Consumed skip_current for {idea['id']}")
+                        applied = self.idea_pool.update_status(
+                            idea["id"], "skipped", claim_token=claim_token or None
+                        )
+                        if not applied:
+                            self.on_output(
+                                f"[{wid}] Claim race detected for {idea['id']}; skip write suppressed, cleanup applied"
+                            )
+                        run_code = 0
+                        continue
+
+                    memory_context = (
+                        self._plugins.failure_memory.prepare(idea_description, wid)
+                        if self._plugins.failure_memory is not None
+                        else None
+                    )
+                    failure_class = (
+                        memory_context.failure_class if memory_context is not None else "general_failure"
+                    )
+                    ranked_fix_actions = (
+                        memory_context.ranked_fix_actions if memory_context is not None else []
+                    )
+                    first_fix_action = (
+                        memory_context.first_fix_action if memory_context is not None else "generate_new_plan"
+                    )
+                    for line in memory_context.log_lines if memory_context is not None else []:
+                        self.on_output(line)
+
+                    self._activity.update_worker(
+                        "experiment_agent",
+                        wid,
+                        status="running",
+                        idea=idea_description[:50],
+                        failure_class=failure_class,
+                        memory_policy="rank_historical_success" if memory_context is not None else "disabled",
+                        ranked_fixes=ranked_fix_actions[:3],
+                        first_fix_action=first_fix_action,
+                    )
+                    self.on_output(f"[{wid}] Running: {idea_description[:60]}")
+                    if gpu_env:
+                        self.on_output(f"[{wid}] Using GPU env: {gpu_env}")
+
+                    workspace = (
+                        self._plugins.workspace_isolation.acquire(wid, str(idea["id"]))
+                        if self._plugins.workspace_isolation is not None
+                        else None
+                    )
+                    workdir = workspace.workdir if workspace is not None else self.repo_path
+                    for line in workspace.log_lines if workspace is not None else []:
+                        self.on_output(line)
+
+                    agent = self.agent_factory()
+                    run_env = {
+                        **gpu_env,
+                        "OPEN_RESEARCHER_MEMORY_POLICY": (
+                            "rank_historical_success" if memory_context is not None else "disabled"
+                        ),
+                        "OPEN_RESEARCHER_FAILURE_CLASS": failure_class,
+                        "OPEN_RESEARCHER_RANKED_FIXES": ",".join(ranked_fix_actions[:3]),
+                        "OPEN_RESEARCHER_FIRST_FIX_ACTION": first_fix_action,
+                        "OPEN_RESEARCHER_PROTOCOL": "research-v1",
+                        "OPEN_RESEARCHER_FRONTIER_ID": str(idea.get("frontier_id", "")).strip(),
+                        "OPEN_RESEARCHER_IDEA_ID": str(idea.get("id", "")).strip(),
+                        "OPEN_RESEARCHER_EXECUTION_ID": str(idea.get("execution_id", "")).strip(),
+                        "OPEN_RESEARCHER_HYPOTHESIS_ID": str(idea.get("hypothesis_id", "")).strip(),
+                        "OPEN_RESEARCHER_EXPERIMENT_SPEC_ID": str(idea.get("experiment_spec_id", "")).strip(),
+                    }
+                    run_env = {key: value for key, value in run_env.items() if value}
+                    code = agent.run(
+                        workdir,
+                        on_output=self.on_output,
+                        program_file="experiment_program.md",
+                        env=run_env,
+                    )
+                    run_code = int(code)
+                    if code == 0:
+                        applied = self.idea_pool.mark_done(
+                            idea["id"],
+                            metric_value=None,
+                            verdict="completed",
+                            claim_token=claim_token or None,
+                        )
+                        if not applied:
+                            self.on_output(
+                                f"[{wid}] Claim race detected for {idea['id']}; winner already finalized, cleanup applied"
+                            )
+                    else:
+                        applied = self.idea_pool.update_status(
+                            idea["id"], "skipped", claim_token=claim_token or None
+                        )
+                        if not applied:
+                            self.on_output(
+                                f"[{wid}] Claim race detected for {idea['id']}; skip write suppressed, cleanup applied"
+                            )
+                except Exception as exc:
+                    self.on_output(f"[{wid}] Error: {exc}")
                     applied = self.idea_pool.update_status(
                         idea["id"], "skipped", claim_token=claim_token or None
                     )
                     if not applied:
                         self.on_output(
-                            f"[{wid}] Claim race detected for {idea['id']}; skip write suppressed, cleanup applied"
+                            f"[{wid}] Claim race detected for {idea['id']}; error skip suppressed, cleanup applied"
                         )
-            except Exception as exc:
-                self.on_output(f"[{wid}] Error: {exc}")
-                applied = self.idea_pool.update_status(
-                    idea["id"], "skipped", claim_token=claim_token or None
-                )
-                if not applied:
-                    self.on_output(
-                        f"[{wid}] Claim race detected for {idea['id']}; error skip suppressed, cleanup applied"
+                    run_code = 1
+                finally:
+                    try:
+                        if self._plugins.failure_memory is not None and memory_context is not None:
+                            self._plugins.failure_memory.record(memory_context, run_code)
+                    except Exception as exc:
+                        logger.debug("Failure memory record failed: %s", exc)
+                    if workspace is not None:
+                        workspace.cleanup()
+                        if workdir != self.repo_path:
+                            self.on_output(f"[{wid}] Worktree cleaned up")
+                    latest_idea = next(
+                        (item for item in self.idea_pool.all_ideas() if item.get("id") == idea.get("id")),
+                        dict(idea),
                     )
-                run_code = 1
-            finally:
-                try:
-                    if self._plugins.failure_memory is not None and memory_context is not None:
-                        self._plugins.failure_memory.record(memory_context, run_code)
-                except Exception as exc:
-                    logger.debug("Failure memory record failed: %s", exc)
-                if workspace is not None:
-                    workspace.cleanup()
-                    if workdir != self.repo_path:
-                        self.on_output(f"[{wid}] Worktree cleaned up")
-
-        self._activity.update_worker(
-            "experiment_agent", wid, status="idle"
-        )
-        if self._plugins.gpu_allocator is not None and allocation is not None:
-            self._plugins.gpu_allocator.release(allocation)
+                    latest_idea["exit_code"] = run_code
+                    latest_idea["worker_id"] = wid
+                    if notify_finished and self._on_experiment_finished is not None:
+                        try:
+                            should_stop = bool(self._on_experiment_finished(latest_idea))
+                        except Exception:
+                            logger.debug("Experiment finished callback failed", exc_info=True)
+                            should_stop = False
+                        if should_stop:
+                            self.stop()
+        except Exception as exc:
+            self._record_fatal_error()
+            self.on_output(f"[{wid}] Fatal worker error: {exc}")
+            logger.debug("Fatal worker loop error", exc_info=True)
+            self.stop()
+        finally:
+            self._activity.update_worker(
+                "experiment_agent", wid, status="idle"
+            )
+            if self._plugins.gpu_allocator is not None and allocation is not None:
+                self._plugins.gpu_allocator.release(allocation)

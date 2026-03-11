@@ -48,16 +48,29 @@ def _print_bootstrap_dry_run(
     console.print("\n[dim]Dry run -- no bootstrap or agent launch performed.[/dim]")
 
 
+def _print_continue_dry_run(
+    repo_path: Path,
+    *,
+    frontend_mode: str,
+    workers: int | None,
+    max_experiments: int,
+) -> None:
+    console.print("[bold]Workflow:[/bold] continue")
+    console.print(f"[bold]Frontend:[/bold] {frontend_mode}")
+    console.print(f"[bold]Working directory:[/bold] {repo_path}")
+    if workers is not None:
+        console.print(f"[bold]Workers:[/bold] {workers}")
+    if max_experiments > 0:
+        console.print(f"[bold]Max experiments:[/bold] {max_experiments}")
+    console.print("\n[dim]Dry run -- no runtime launched.[/dim]")
+
+
 def _dispatch_workflow(
     *,
     repo_path: Path,
     agent: str | None,
     workers: Optional[int],
-    multi: bool,
-    idea_agent: str | None,
-    exp_agent: str | None,
     mode: str = "interactive",
-    headless: bool = False,
     tag: str | None = None,
     goal: str | None = None,
     max_experiments: int = 0,
@@ -68,11 +81,7 @@ def _dispatch_workflow(
         selection = build_workflow_selection(
             agent=agent,
             mode=mode,
-            headless=headless,
             workers=workers,
-            multi=multi,
-            idea_agent=idea_agent,
-            exp_agent=exp_agent,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -83,11 +92,12 @@ def _dispatch_workflow(
     use_bootstrap_flow = (
         force_bootstrap
         or not research_dir.is_dir()
-        or selection.frontend_mode == "headless"
         or tag is not None
-        or goal is not None
-        or max_experiments > 0
     )
+
+    if research_dir.is_dir() and not force_bootstrap and goal is not None:
+        console.print("[red]--goal is only valid when bootstrapping a new workflow.[/red]")
+        raise typer.Exit(code=1)
 
     if use_bootstrap_flow:
         if selection.frontend_mode == "headless" and not goal:
@@ -110,46 +120,79 @@ def _dispatch_workflow(
         if selection.frontend_mode == "headless":
             from open_researcher.headless import do_start_headless
 
-            do_start_headless(
-                repo_path=repo_path,
-                goal=goal or "",
-                max_experiments=max_experiments,
-                agent_name=selection.primary_agent_name,
-                tag=tag,
-                multi=selection.use_multi_agent,
-                idea_agent_name=selection.idea_agent_name,
-                exp_agent_name=selection.exp_agent_name,
-                workers=selection.workers,
-            )
+            try:
+                exit_code = do_start_headless(
+                    repo_path=repo_path,
+                    goal=goal or "",
+                    max_experiments=max_experiments,
+                    agent_name=selection.primary_agent_name,
+                    tag=tag,
+                    workers=selection.workers,
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+                raise typer.Exit(code=1)
+            if exit_code:
+                raise typer.Exit(code=exit_code)
             return
 
         from open_researcher.run_cmd import do_start
 
-        do_start(
-            repo_path=repo_path,
-            agent_name=selection.primary_agent_name,
-            tag=tag,
-            multi=selection.use_multi_agent,
-            idea_agent_name=selection.idea_agent_name,
-            exp_agent_name=selection.exp_agent_name,
-            workers=selection.workers,
-        )
+        try:
+            exit_code = do_start(
+                repo_path=repo_path,
+                agent_name=selection.primary_agent_name,
+                tag=tag,
+                workers=selection.workers,
+                goal=goal,
+                max_experiments=max_experiments,
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
         return
 
-    if selection.use_multi_agent:
-        from open_researcher.run_cmd import do_run_multi
+    if selection.frontend_mode == "headless":
+        if dry_run:
+            _print_continue_dry_run(
+                repo_path,
+                frontend_mode=selection.frontend_mode,
+                workers=selection.workers,
+                max_experiments=max_experiments,
+            )
+            return
+        from open_researcher.headless import do_run_headless
 
-        do_run_multi(
-            repo_path=repo_path,
-            idea_agent_name=selection.idea_agent_name,
-            exp_agent_name=selection.exp_agent_name,
-            dry_run=dry_run,
-            workers=selection.workers,
-        )
+        try:
+            exit_code = do_run_headless(
+                repo_path=repo_path,
+                agent_name=selection.primary_agent_name,
+                max_experiments=max_experiments,
+                workers=selection.workers,
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
     else:
         from open_researcher.run_cmd import do_run
 
-        do_run(repo_path=repo_path, agent_name=selection.primary_agent_name, dry_run=dry_run)
+        try:
+            exit_code = do_run(
+                repo_path=repo_path,
+                agent_name=selection.primary_agent_name,
+                dry_run=dry_run,
+                workers=selection.workers,
+                max_experiments=max_experiments,
+            )
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        if exit_code:
+            raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -220,16 +263,7 @@ def run(
     workers: Optional[int] = typer.Option(
         None,
         "--workers",
-        help="Experiment worker count. `1` enables the research loop, `>1` enables parallel workers.",
-    ),
-    multi: bool = typer.Option(False, "--multi", help="Enable dual-agent mode (Idea + Experiment).", hidden=True),
-    idea_agent: str = typer.Option(None, "--idea-agent", help="Agent for idea generation (multi mode).", hidden=True),
-    exp_agent: str = typer.Option(None, "--exp-agent", help="Agent for experiments (multi mode).", hidden=True),
-    headless: bool = typer.Option(
-        False,
-        "--headless",
-        help="Run without TUI, output JSON Lines to stdout.",
-        hidden=True,
+        help="Experiment worker count. `1` runs serially, `>1` enables parallel experiment workers.",
     ),
     goal: str = typer.Option(None, "--goal", help="Research goal for bootstrap/headless mode."),
     max_experiments: int = typer.Option(0, "--max-experiments", help="Stop after N experiments (0 = unlimited)."),
@@ -242,10 +276,6 @@ def run(
         tag=tag,
         mode=mode,
         workers=workers,
-        multi=multi,
-        idea_agent=idea_agent,
-        exp_agent=exp_agent,
-        headless=headless,
         goal=goal,
         max_experiments=max_experiments,
         dry_run=dry_run,
@@ -260,16 +290,7 @@ def start(
     workers: Optional[int] = typer.Option(
         None,
         "--workers",
-        help="Experiment worker count. `1` enables the research loop, `>1` enables parallel workers.",
-    ),
-    multi: bool = typer.Option(False, "--multi", help="Enable dual-agent mode (Idea + Experiment).", hidden=True),
-    idea_agent: str = typer.Option(None, "--idea-agent", help="Agent for idea generation (multi mode).", hidden=True),
-    exp_agent: str = typer.Option(None, "--exp-agent", help="Agent for experiments (multi mode).", hidden=True),
-    headless: bool = typer.Option(
-        False,
-        "--headless",
-        help="Run without TUI, output JSON Lines to stdout.",
-        hidden=True,
+        help="Experiment worker count. `1` runs serially, `>1` enables parallel experiment workers.",
     ),
     goal: str = typer.Option(None, "--goal", help="Research goal (required for `--mode headless`)."),
     max_experiments: int = typer.Option(0, "--max-experiments", help="Stop after N experiments (0 = unlimited)."),
@@ -281,10 +302,6 @@ def start(
         tag=tag,
         mode=mode,
         workers=workers,
-        multi=multi,
-        idea_agent=idea_agent,
-        exp_agent=exp_agent,
-        headless=headless,
         goal=goal,
         max_experiments=max_experiments,
         force_bootstrap=True,

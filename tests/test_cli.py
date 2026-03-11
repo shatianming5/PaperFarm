@@ -15,7 +15,8 @@ def test_init_via_cli():
         result = runner.invoke(app, ["init", "--tag", "test1"])
         assert result.exit_code == 0
         assert Path(".research").is_dir()
-        assert Path(".research/program.md").exists()
+        assert Path(".research/scout_program.md").exists()
+        assert Path(".research/manager_program.md").exists()
 
 
 def test_init_refuses_duplicate():
@@ -101,7 +102,7 @@ def test_start_headless_help():
     assert "--goal" in result.stdout
 
 
-def test_legacy_start_flags_are_hidden_from_help():
+def test_hidden_start_flags_are_absent_from_help():
     result = runner.invoke(app, ["start", "--help"])
     assert result.exit_code == 0
     assert "--multi" not in result.stdout
@@ -147,7 +148,74 @@ def test_run_mode_headless_routes_to_headless_bootstrap():
         mock_headless.assert_called_once()
         kwargs = mock_headless.call_args.kwargs
         assert kwargs["workers"] == 2
-        assert kwargs["multi"] is True
+
+
+def test_run_existing_research_headless_routes_to_continue_flow():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+        from unittest.mock import patch
+
+        with patch("open_researcher.headless.do_run_headless", return_value=0) as mock_headless:
+            result = runner.invoke(app, ["run", "--mode", "headless", "--workers", "2"])
+
+        assert result.exit_code == 0
+        mock_headless.assert_called_once()
+        kwargs = mock_headless.call_args.kwargs
+        assert kwargs["workers"] == 2
+
+
+def test_run_existing_research_headless_dry_run_does_not_launch_runtime():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+        from unittest.mock import patch
+
+        with patch("open_researcher.headless.do_run_headless") as mock_headless:
+            result = runner.invoke(app, ["run", "--mode", "headless", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "Dry run" in result.stdout
+        mock_headless.assert_not_called()
+
+
+def test_run_existing_research_rejects_goal():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+
+        result = runner.invoke(app, ["run", "--goal", "should fail"])
+
+        assert result.exit_code == 1
+        assert "--goal is only valid" in result.stdout
+
+
+def test_run_invalid_protocol_prints_friendly_error():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: totally-wrong\n")
+
+        result = runner.invoke(app, ["run"])
+
+        assert result.exit_code == 1
+        assert "Unsupported research.protocol" in result.stdout
+
+
+def test_run_interactive_propagates_nonzero_exit_code():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+        from unittest.mock import patch
+
+        with patch("open_researcher.run_cmd.do_run", return_value=7):
+            result = runner.invoke(app, ["run"])
+
+        assert result.exit_code == 7
 
 
 def test_start_mode_headless_routes_to_headless_entrypoint():
@@ -165,10 +233,9 @@ def test_start_mode_headless_routes_to_headless_entrypoint():
         mock_headless.assert_called_once()
         kwargs = mock_headless.call_args.kwargs
         assert kwargs["workers"] == 2
-        assert kwargs["multi"] is True
 
 
-def test_run_workers_routes_to_multi_entrypoint():
+def test_run_workers_route_to_research_runtime():
     with runner.isolated_filesystem():
         Path(".git").mkdir()
         result = runner.invoke(app, ["init", "--tag", "clitest"])
@@ -176,10 +243,10 @@ def test_run_workers_routes_to_multi_entrypoint():
 
         from unittest.mock import patch
 
-        with patch("open_researcher.run_cmd.do_run_multi", return_value=None) as mock_multi:
+        with patch("open_researcher.run_cmd.do_run", return_value=None) as mock_run:
             result = runner.invoke(app, ["run", "--workers", "1"])
 
         assert result.exit_code == 0
-        mock_multi.assert_called_once()
-        kwargs = mock_multi.call_args.kwargs
+        mock_run.assert_called_once()
+        kwargs = mock_run.call_args.kwargs
         assert kwargs["workers"] == 1

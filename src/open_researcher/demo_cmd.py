@@ -99,9 +99,9 @@ def _build_activity() -> dict:
                 {"id": "worker-0", "status": "running", "idea": "sliding window attention", "updated_at": now},
             ],
         },
-        "idea_agent": {
+        "manager_agent": {
             "status": "idle",
-            "detail": "Waiting for experiment cycle to complete",
+            "detail": "Waiting for the next research cycle",
             "updated_at": now,
         },
     }
@@ -293,7 +293,7 @@ def do_demo() -> None:
             t = threading.Thread(target=_inject_logs, args=(app,), daemon=True)
             t.start()
 
-        app = ResearchApp(repo, multi=True, on_ready=on_ready)
+        app = ResearchApp(repo, on_ready=on_ready)
         console.print("[dim]Press q to exit. Use 1-5 to switch tabs.[/dim]\n")
         app.run()
 

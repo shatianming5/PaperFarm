@@ -31,19 +31,21 @@ def test_init_creates_research_directory():
 
         research = Path(tmpdir, ".research")
         assert research.is_dir()
-        assert (research / "program.md").is_file()
         assert (research / "config.yaml").is_file()
         assert (research / "project-understanding.md").is_file()
         assert (research / "evaluation.md").is_file()
         assert (research / "literature.md").is_file()
         assert (research / "ideas.md").is_file()
+        assert (research / "scout_program.md").is_file()
+        assert (research / "manager_program.md").is_file()
+        assert (research / "critic_program.md").is_file()
+        assert (research / "experiment_program.md").is_file()
         assert (research / "results.tsv").is_file()
         assert (research / "scripts" / "record.py").is_file()
         assert (research / "scripts" / "rollback.sh").is_file()
 
-        # Check tag substitution in program.md
-        program = (research / "program.md").read_text()
-        assert "test1" in program
+        experiment = (research / "experiment_program.md").read_text()
+        assert "research/test1" in experiment
 
         # Check results.tsv has header
         results = (research / "results.tsv").read_text()
@@ -75,8 +77,8 @@ def test_init_generates_default_tag():
 
         do_init(repo_path=Path(tmpdir), tag=None)
 
-        program = (Path(tmpdir) / ".research" / "program.md").read_text()
-        assert "research/" in program
+        experiment = (Path(tmpdir) / ".research" / "experiment_program.md").read_text()
+        assert "research/" in experiment
 
 
 def test_init_fails_without_git_directory(tmp_path):
@@ -111,9 +113,11 @@ def test_init_creates_shared_files(tmp_path):
     assert events.exists()
     assert events.read_text() == ""
 
-    # Multi-agent templates rendered
-    assert (research / "idea_program.md").exists()
+    assert (research / "manager_program.md").exists()
+    assert (research / "critic_program.md").exists()
     assert (research / "experiment_program.md").exists()
+    assert (research / "research_graph.json").exists()
+    assert (research / "research_memory.json").exists()
 
 
 def test_experiment_program_serial_mode():
@@ -126,6 +130,10 @@ def test_experiment_program_serial_mode():
     assert "one at a time" in result
     assert "experiment_progress.json" in result
     assert "research/demo" in result
+    assert "research-v1" in result
+    assert "execute exactly one frontier item" in result
+    assert "execution_id" in result
+    assert "frontier_id" in result
 
 
 def test_init_creates_experiment_progress(init_dir):
@@ -192,13 +200,3 @@ def test_init_creates_scout_and_strategy_files(init_dir):
 
     strategy = (init_dir / "research-strategy.md").read_text()
     assert "Research Direction" in strategy
-
-
-def test_idea_program_reads_strategy_files():
-    """idea_program.md.j2 should instruct agent to read strategy files."""
-    from jinja2 import Environment, PackageLoader
-
-    env = Environment(loader=PackageLoader("open_researcher", "templates"))
-    tmpl = env.get_template("idea_program.md.j2")
-    result = tmpl.render(tag="test")
-    assert "research-strategy.md" in result

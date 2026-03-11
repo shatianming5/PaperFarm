@@ -8,7 +8,7 @@ from typing import Literal
 
 from filelock import FileLock
 
-from open_researcher.event_journal import now_iso
+from open_researcher.event_journal import next_seq_unlocked, now_iso
 from open_researcher.storage import atomic_write_json
 
 ControlCommand = Literal["pause", "resume", "skip_current", "clear_skip"]
@@ -71,6 +71,7 @@ def _event_log_path(ctrl_path: Path) -> Path:
 
 def _control_event_record(
     *,
+    event_seq: int,
     command: ControlCommand,
     seq: int,
     source: str,
@@ -79,6 +80,7 @@ def _control_event_record(
     state: dict,
 ) -> dict:
     return {
+        "seq": int(event_seq),
         "ts": now_iso(),
         "level": "info",
         "phase": "control",
@@ -275,9 +277,11 @@ def apply_control_command(
         )
         if result["applied"]:
             ctrl["event_count"] = int(ctrl.get("event_count", 0)) + 1
+            event_seq = next_seq_unlocked(events_path)
             _append_event_unlocked(
                 events_path,
                 _control_event_record(
+                    event_seq=event_seq,
                     command=command,
                     seq=seq,
                     source=source,
@@ -318,9 +322,11 @@ def issue_control_command(
         )
         if result["applied"]:
             ctrl["event_count"] = int(ctrl.get("event_count", 0)) + 1
+            event_seq = next_seq_unlocked(events_path)
             _append_event_unlocked(
                 events_path,
                 _control_event_record(
+                    event_seq=event_seq,
                     command=command,
                     seq=next_seq,
                     source=source,
@@ -331,3 +337,45 @@ def issue_control_command(
             )
         atomic_write_json(ctrl_path, ctrl)
     return {**result, "state": ctrl}
+
+
+def consume_skip_current(ctrl_path: Path, *, source: str) -> bool:
+    """Atomically clear a pending skip_current flag and record the clear event."""
+    events_path = _event_log_path(ctrl_path)
+    lock = FileLock(str(events_path) + ".lock")
+    with lock:
+        ctrl = _replay_control_state_unlocked(
+            ctrl_path,
+            events_path,
+            use_snapshot_fallback=True,
+        )
+        if not bool(ctrl.get("skip_current", False)):
+            atomic_write_json(ctrl_path, ctrl)
+            return False
+
+        next_seq = int(ctrl.get("control_seq", 0)) + 1
+        result = _apply_locked_command(
+            ctrl,
+            command="clear_skip",
+            seq=next_seq,
+            source=source,
+            reason="runtime consumed skip_current",
+            command_id=None,
+        )
+        if result["applied"]:
+            ctrl["event_count"] = int(ctrl.get("event_count", 0)) + 1
+            event_seq = next_seq_unlocked(events_path)
+            _append_event_unlocked(
+                events_path,
+                _control_event_record(
+                    event_seq=event_seq,
+                    command="clear_skip",
+                    seq=next_seq,
+                    source=source,
+                    reason="runtime consumed skip_current",
+                    command_id=None,
+                    state=ctrl,
+                ),
+            )
+        atomic_write_json(ctrl_path, ctrl)
+        return bool(result["applied"])

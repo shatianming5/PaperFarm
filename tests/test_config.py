@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from open_researcher.config import ResearchConfig, load_config
+from open_researcher.config import ResearchConfig, load_config, require_supported_protocol
 
 
 @pytest.fixture
@@ -136,3 +136,56 @@ def test_load_config_runtime_plugin_toggles(research_dir):
     assert cfg.enable_gpu_allocation is False
     assert cfg.enable_failure_memory is False
     assert cfg.enable_worktree_isolation is False
+
+
+def test_load_config_graph_protocol_fields(research_dir):
+    config_data = {
+        "research": {
+            "protocol": "research-v1",
+            "manager_batch_size": 5,
+            "critic_repro_policy": "always",
+        },
+        "memory": {
+            "ideation": False,
+            "experiment": True,
+            "repo_type_prior": False,
+        },
+        "roles": {
+            "manager_agent": "codex",
+            "critic_agent": "claude-code",
+        },
+    }
+    config_path = research_dir / "config.yaml"
+    config_path.write_text(yaml.dump(config_data))
+
+    cfg = load_config(research_dir)
+
+    assert cfg.protocol == "research-v1"
+    assert cfg.manager_batch_size == 5
+    assert cfg.critic_repro_policy == "always"
+    assert cfg.enable_ideation_memory is False
+    assert cfg.enable_experiment_memory is True
+    assert cfg.enable_repo_type_prior is False
+    assert cfg.role_agents["manager_agent"] == "codex"
+    assert cfg.role_agents["critic_agent"] == "claude-code"
+
+
+def test_load_config_legacy_protocol_aliases_normalize_to_research_v1(research_dir):
+    config_path = research_dir / "config.yaml"
+
+    config_path.write_text(yaml.dump({"research": {"protocol": "graph-v1"}}))
+    assert load_config(research_dir).protocol == "research-v1"
+
+    config_path.write_text(yaml.dump({"research": {"protocol": "legacy"}}))
+    assert load_config(research_dir).protocol == "research-v1"
+
+
+def test_load_config_preserves_unknown_protocol_for_validation(research_dir):
+    config_path = research_dir / "config.yaml"
+    config_path.write_text(yaml.dump({"research": {"protocol": "totally-wrong"}}))
+
+    cfg = load_config(research_dir)
+
+    assert cfg.protocol == "totally-wrong"
+    with pytest.raises(ValueError):
+        require_supported_protocol(cfg)

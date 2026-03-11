@@ -2,12 +2,15 @@
 
 import json
 import tempfile
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from open_researcher.control_plane import issue_control_command
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.worker import WorkerManager
-from open_researcher.worker_plugins import WorkerRuntimePlugins
+from open_researcher.worker_plugins import FailureMemoryPlugin, WorkerRuntimePlugins
 
 
 def _make_research_dir(tmp: Path) -> Path:
@@ -258,6 +261,110 @@ def test_worker_manager_stop_signal():
         first_run.wait(timeout=5)
         wm.stop()
         wm.join(timeout=5)
+
+
+def test_worker_manager_waits_for_resume_before_running():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        idea_pool = _make_idea_pool(
+            research,
+            [
+                {
+                    "id": "idea-001",
+                    "description": "Paused idea",
+                    "status": "pending",
+                    "priority": 1,
+                    "claimed_by": None,
+                    "assigned_experiment": None,
+                    "result": None,
+                    "source": "original",
+                    "category": "general",
+                    "gpu_hint": "auto",
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            ],
+        )
+        issue_control_command(research / "control.json", command="pause", source="test")
+
+        mock_gpu_manager = MagicMock()
+        mock_gpu_manager.refresh.return_value = []
+        started = threading.Event()
+
+        def mock_agent_factory():
+            agent = MagicMock()
+
+            def run_side_effect(*args, **kwargs):
+                started.set()
+                return 0
+
+            agent.run.side_effect = run_side_effect
+            return agent
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=mock_gpu_manager,
+            idea_pool=idea_pool,
+            agent_factory=mock_agent_factory,
+            max_workers=1,
+            on_output=lambda line: None,
+        )
+
+        wm.start()
+        time.sleep(0.3)
+        assert started.is_set() is False
+        issue_control_command(research / "control.json", command="resume", source="test")
+        wm.join(timeout=5)
+        assert started.is_set() is True
+
+
+def test_worker_manager_marks_claimed_item_skipped_when_setup_raises():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        idea_pool = _make_idea_pool(
+            research,
+            [
+                {
+                    "id": "idea-001",
+                    "description": "Failure memory crash",
+                    "status": "pending",
+                    "priority": 1,
+                    "claimed_by": None,
+                    "assigned_experiment": None,
+                    "result": None,
+                    "source": "original",
+                    "category": "general",
+                    "gpu_hint": "auto",
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            ],
+        )
+
+        mock_gpu_manager = MagicMock()
+        mock_gpu_manager.refresh.return_value = []
+
+        failing_memory = MagicMock(spec=FailureMemoryPlugin)
+        failing_memory.prepare.side_effect = RuntimeError("prepare failed")
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=mock_gpu_manager,
+            idea_pool=idea_pool,
+            agent_factory=lambda: MagicMock(),
+            max_workers=1,
+            on_output=lambda line: None,
+            runtime_plugins=WorkerRuntimePlugins(failure_memory=failing_memory),
+        )
+
+        wm.start()
+        wm.join(timeout=5)
+
+        summary = idea_pool.summary()
+        assert summary["running"] == 0
+        assert summary["skipped"] == 1
 
         # Not all 19 ideas should have been processed
         summary = idea_pool.summary()

@@ -4,10 +4,12 @@
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from filelock import FileLock
 
@@ -32,12 +34,26 @@ def main():
     parser.add_argument("--desc", required=True, help="Brief description")
     args = parser.parse_args()
 
-    # Validate --secondary is valid JSON
     try:
-        json.loads(args.secondary)
+        secondary = json.loads(args.secondary)
     except (json.JSONDecodeError, TypeError):
         print(f"[ERROR] --secondary is not valid JSON: {args.secondary}", file=sys.stderr)
         raise SystemExit(1)
+    if not isinstance(secondary, dict):
+        print(f"[ERROR] --secondary must decode to a JSON object: {args.secondary}", file=sys.stderr)
+        raise SystemExit(1)
+
+    trace = {
+        "frontier_id": os.environ.get("OPEN_RESEARCHER_FRONTIER_ID", "").strip(),
+        "idea_id": os.environ.get("OPEN_RESEARCHER_IDEA_ID", "").strip(),
+        "execution_id": os.environ.get("OPEN_RESEARCHER_EXECUTION_ID", "").strip(),
+        "hypothesis_id": os.environ.get("OPEN_RESEARCHER_HYPOTHESIS_ID", "").strip(),
+        "experiment_spec_id": os.environ.get("OPEN_RESEARCHER_EXPERIMENT_SPEC_ID", "").strip(),
+    }
+    trace = {key: value for key, value in trace.items() if value}
+    if trace:
+        secondary["_open_researcher_trace"] = trace
+    secondary["_open_researcher_result_id"] = uuid4().hex
 
     # Find .research/results.tsv relative to git root
     git_root_result = subprocess.run(
@@ -55,11 +71,11 @@ def main():
 
     # Append row
     row = [
-        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         get_git_short_hash(),
         args.metric,
         f"{args.value:.6f}",
-        args.secondary,
+        json.dumps(secondary, separators=(",", ":")),
         args.status,
         args.desc,
     ]

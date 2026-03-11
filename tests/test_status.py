@@ -141,7 +141,13 @@ def test_status_shows_activity(tmp_path):
     (research / "results.tsv").write_text(header)
     (research / "activity.json").write_text(
         json.dumps(
-            {"idea_agent": {"status": "analyzing", "detail": "reviewing #3", "updated_at": "2026-03-09T15:00:00Z"}}
+            {
+                "manager_agent": {
+                    "status": "analyzing",
+                    "detail": "reviewing #3",
+                    "updated_at": "2026-03-09T15:00:00Z",
+                }
+            }
         )
     )
     # Create the docs files as empty
@@ -152,6 +158,39 @@ def test_status_shows_activity(tmp_path):
     state = parse_research_state(tmp_path)
     assert state is not None
     assert state["total"] == 0
+
+
+def test_parse_state_includes_research_graph_summary(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "config.yaml").write_text(
+        "mode: autonomous\nresearch:\n  protocol: research-v1\nmetrics:\n  primary:\n    name: acc\n    direction: higher_is_better\n"
+    )
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+    )
+    (research / "research_graph.json").write_text(
+        json.dumps(
+            {
+                "version": "research-v1",
+                "repo_profile": {},
+                "hypotheses": [{"id": "hyp-001"}],
+                "experiment_specs": [{"id": "spec-001"}],
+                "evidence": [{"id": "evi-001"}],
+                "claim_updates": [{"id": "claim-001"}],
+                "branch_relations": [],
+                "frontier": [{"id": "frontier-001", "status": "approved"}],
+                "counters": {},
+            }
+        )
+    )
+
+    state = parse_research_state(tmp_path)
+
+    assert state["protocol"] == "research-v1"
+    assert state["graph"]["hypotheses"] == 1
+    assert state["graph"]["frontier_runnable"] == 1
+    assert "Research Loop" in state["phase_label"]
 
 
 def test_parse_state_with_corrupt_metric(tmp_path):
@@ -172,6 +211,34 @@ def test_parse_state_with_corrupt_metric(tmp_path):
     assert state["baseline_value"] is None
     assert state["current_value"] is None
     assert state["best_value"] is None
+
+
+def test_parse_state_reports_config_error_instead_of_silent_defaults(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "config.yaml").write_text(": :\n  bad: [yaml: broken")
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+    )
+
+    state = parse_research_state(tmp_path)
+
+    assert state["config_error"]
+    assert state["protocol_supported"] is False
+
+
+def test_parse_state_handles_wrong_shaped_graph_json(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+    )
+    (research / "research_graph.json").write_text(json.dumps({"hypotheses": 1, "frontier": {}}))
+
+    state = parse_research_state(tmp_path)
+
+    assert state["graph"]["error"]
 
 
 def test_print_status_with_corrupt_metrics(tmp_path):

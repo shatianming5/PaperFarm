@@ -6,15 +6,11 @@ import logging
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 
-from open_researcher.parallel_runtime import run_parallel_worker_loop
-
 if TYPE_CHECKING:
-    from open_researcher.config import ResearchConfig
-    from open_researcher.research_loop import ResearchLoop
     from open_researcher.tui.app import ResearchApp
     from open_researcher.tui.events import TUIEventRenderer
 
@@ -37,7 +33,6 @@ def start_daemon(target: Callable[[], None]) -> threading.Thread:
 def run_tui_session(
     repo_path: Path,
     *,
-    multi: bool,
     setup: SessionSetup,
     research_dir: Path | None = None,
     initial_phase: str = "experimenting",
@@ -57,7 +52,6 @@ def run_tui_session(
 
     app = ResearchApp(
         repo_path,
-        multi=multi,
         on_ready=on_ready,
         initial_phase=initial_phase,
     )
@@ -77,39 +71,6 @@ def run_tui_session(
         renderer = renderer_ref["renderer"]
         if renderer is not None:
             renderer.close()
-
-
-def launch_dual_agent_runtime(
-    *,
-    repo_path: Path,
-    research_dir: Path,
-    cfg: "ResearchConfig",
-    loop: "ResearchLoop",
-    renderer: "TUIEventRenderer",
-    idea_agent: Any,
-    exp_agent: Any,
-    stop: threading.Event,
-    exit_codes: dict[str, int],
-) -> threading.Thread:
-    """Launch either the default alternating loop or advanced parallel workers."""
-    if cfg.max_workers > 1:
-        return start_daemon(
-            lambda: exit_codes.update(
-                run_parallel_worker_loop(
-                    repo_path,
-                    research_dir,
-                    cfg,
-                    idea_agent,
-                    exp_agent,
-                    renderer.make_output_callback("experimenting"),
-                    stop=stop,
-                )
-            )
-        )
-
-    return start_daemon(
-        lambda: exit_codes.update(loop.run_multi_agent(idea_agent, exp_agent, stop=stop))
-    )
 
 
 def print_exit_summary(

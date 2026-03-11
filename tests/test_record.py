@@ -1,5 +1,6 @@
 # tests/test_record.py
 import csv
+import json
 import subprocess
 import sys
 import tempfile
@@ -61,9 +62,12 @@ def test_record_appends_to_tsv():
         assert rows[0]["metric_value"] == "0.850000"
         assert rows[0]["status"] == "keep"
         assert rows[0]["description"] == "baseline"
-        assert rows[0]["secondary_metrics"] == '{"f1": 0.83}'
+        secondary = json.loads(rows[0]["secondary_metrics"])
+        assert secondary["f1"] == 0.83
+        assert "_open_researcher_result_id" in secondary
         assert len(rows[0]["commit"]) == 7  # short hash
         assert rows[0]["timestamp"]  # non-empty
+        assert "." in rows[0]["timestamp"]
 
 
 def test_record_creates_header_if_missing():

@@ -10,12 +10,17 @@ from open_researcher.cli import app
 runner = CliRunner()
 
 
+def _combined_output(result) -> str:
+    return (result.stdout or "") + getattr(result, "stderr", "")
+
+
 @pytest.fixture
 def research_dir(tmp_path, monkeypatch):
     """Set up a minimal .research directory with an empty idea pool."""
     research = tmp_path / ".research"
     research.mkdir()
     (research / "idea_pool.json").write_text(json.dumps({"ideas": []}))
+    (research / "config.yaml").write_text("research:\n  protocol: research-v1\n")
     monkeypatch.chdir(tmp_path)
     return research
 
@@ -86,34 +91,25 @@ def test_ideas_list_filter_status(research_dir):
 
 
 def test_ideas_add(research_dir):
-    """Add command creates a new idea in the pool."""
+    """Mutation commands are disabled because idea_pool is a projection."""
     result = runner.invoke(app, ["ideas", "add", "Try dropout 0.3"])
-    assert result.exit_code == 0
-    assert "Added: idea-001" in result.stdout
-
+    assert result.exit_code == 1
+    assert "read-only projected backlog" in _combined_output(result)
     data = json.loads((research_dir / "idea_pool.json").read_text())
-    assert len(data["ideas"]) == 1
-    assert data["ideas"][0]["description"] == "Try dropout 0.3"
-    assert data["ideas"][0]["source"] == "user"
-    assert "claimed_by" not in data["ideas"][0]
-    assert "assigned_experiment" not in data["ideas"][0]
+    assert data["ideas"] == []
 
 
 def test_ideas_add_with_options(research_dir):
-    """Add command with category and priority."""
+    """Mutation commands stay disabled even when options are provided."""
     result = runner.invoke(
         app, ["ideas", "add", "New loss function", "--category", "loss", "--priority", "2"]
     )
-    assert result.exit_code == 0
-
-    data = json.loads((research_dir / "idea_pool.json").read_text())
-    idea = data["ideas"][0]
-    assert idea["category"] == "loss"
-    assert idea["priority"] == 2
+    assert result.exit_code == 1
+    assert "read-only projected backlog" in _combined_output(result)
 
 
 def test_ideas_delete(research_dir):
-    """Delete command removes an idea from the pool."""
+    """Delete is blocked for projected backlog rows."""
     pool_path = research_dir / "idea_pool.json"
     pool_path.write_text(
         json.dumps(
@@ -137,15 +133,15 @@ def test_ideas_delete(research_dir):
         )
     )
     result = runner.invoke(app, ["ideas", "delete", "idea-001"])
-    assert result.exit_code == 0
-    assert "Deleted: idea-001" in result.stdout
+    assert result.exit_code == 1
+    assert "read-only projected backlog" in _combined_output(result)
 
     data = json.loads(pool_path.read_text())
-    assert len(data["ideas"]) == 0
+    assert len(data["ideas"]) == 1
 
 
 def test_ideas_prioritize(research_dir):
-    """Prioritize command updates an idea's priority."""
+    """Prioritize is blocked for projected backlog rows."""
     pool_path = research_dir / "idea_pool.json"
     pool_path.write_text(
         json.dumps(
@@ -169,15 +165,28 @@ def test_ideas_prioritize(research_dir):
         )
     )
     result = runner.invoke(app, ["ideas", "prioritize", "idea-001", "1"])
-    assert result.exit_code == 0
-    assert "Updated idea-001 priority to 1" in result.stdout
+    assert result.exit_code == 1
+    assert "read-only projected backlog" in _combined_output(result)
 
     data = json.loads(pool_path.read_text())
-    assert data["ideas"][0]["priority"] == 1
+    assert data["ideas"][0]["priority"] == 5
 
 
 def test_ideas_list_empty(research_dir):
     """List command with empty pool shows table header but no rows."""
     result = runner.invoke(app, ["ideas", "list"])
     assert result.exit_code == 0
-    assert "Ideas" in result.stdout
+    assert "Projected Backlog" in result.stdout
+
+
+def test_ideas_mutation_rejects_unsupported_protocol(tmp_path, monkeypatch):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "idea_pool.json").write_text(json.dumps({"ideas": []}))
+    (research / "config.yaml").write_text("research:\n  protocol: totally-wrong\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["ideas", "add", "broken"])
+
+    assert result.exit_code == 1
+    assert "Unsupported research.protocol" in _combined_output(result)

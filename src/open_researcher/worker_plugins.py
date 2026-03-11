@@ -163,16 +163,29 @@ class WorkerRuntimePlugins:
     workspace_isolation: WorktreeIsolationPlugin | None = None
 
 
-def build_legacy_worker_plugins(
+def build_default_worker_plugins(
     repo_path: Path,
     research_dir: Path,
     gpu_manager: GPUManager | None,
 ) -> WorkerRuntimePlugins:
-    """Preserve legacy advanced behavior for direct WorkerManager users."""
+    """Build the default research-v1 worker runtime plugins."""
     return WorkerRuntimePlugins(
         gpu_allocator=GPUAllocatorPlugin(gpu_manager) if gpu_manager is not None else None,
         failure_memory=FailureMemoryPlugin(
             FailureMemoryLedger(research_dir / "failure_memory_ledger.json")
         ),
         workspace_isolation=WorktreeIsolationPlugin(repo_path),
+    )
+
+
+def build_legacy_worker_plugins(
+    repo_path: Path,
+    research_dir: Path,
+    gpu_manager: GPUManager | None,
+) -> WorkerRuntimePlugins:
+    """Backward-compatible alias for the default worker runtime plugins."""
+    return build_default_worker_plugins(
+        repo_path=repo_path,
+        research_dir=research_dir,
+        gpu_manager=gpu_manager,
     )

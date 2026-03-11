@@ -41,26 +41,91 @@ class ReviewAutoConfirmed:
 
 
 @dataclass(slots=True)
-class IdeaCycleStarted:
+class RoleFailed:
+    role: str
+    exit_code: int
+
+
+@dataclass(slots=True)
+class ManagerCycleStarted:
     cycle: int
 
 
 @dataclass(slots=True)
-class IdeaAgentDone:
-    cycle: int
-    exit_code: int
+class HypothesisProposed:
+    count: int
+    hypothesis_ids: list[str] | None = None
+
+
+@dataclass(slots=True)
+class ExperimentSpecCreated:
+    count: int
+    experiment_spec_ids: list[str] | None = None
+
+
+@dataclass(slots=True)
+class CriticReviewStarted:
+    stage: str
+
+
+@dataclass(slots=True)
+class FrontierSynced:
+    frontier_items: int
+    items: list[dict] | None = None
+
+
+@dataclass(slots=True)
+class ExperimentPreflightFailed:
+    rejected_count: int
+    items: list[dict] | None = None
 
 
 @dataclass(slots=True)
 class ExperimentStarted:
     experiment_num: int
     max_experiments: int
+    frontier_id: str = ""
+    idea_id: str = ""
+    execution_id: str = ""
+    hypothesis_id: str = ""
+    experiment_spec_id: str = ""
+    selection_reason_code: str = ""
 
 
 @dataclass(slots=True)
 class ExperimentCompleted:
     experiment_num: int
     exit_code: int
+    frontier_id: str = ""
+    idea_id: str = ""
+    execution_id: str = ""
+    hypothesis_id: str = ""
+    experiment_spec_id: str = ""
+    selection_reason_code: str = ""
+
+
+@dataclass(slots=True)
+class EvidenceRecorded:
+    evidence_created: int
+    items: list[dict] | None = None
+
+
+@dataclass(slots=True)
+class ClaimUpdated:
+    count: int
+    items: list[dict] | None = None
+
+
+@dataclass(slots=True)
+class ReproductionRequested:
+    count: int
+    items: list[dict] | None = None
+
+
+@dataclass(slots=True)
+class MemoryUpdated:
+    ideation_memory: int
+    experiment_memory: int
 
 
 @dataclass(slots=True)
@@ -93,6 +158,12 @@ class SessionCompleted:
     pass
 
 
+@dataclass(slots=True)
+class SessionFailed:
+    failed_role: str
+    exit_code: int
+
+
 ResearchEvent: TypeAlias = (
     SessionStarted
     | ScoutStarted
@@ -100,16 +171,26 @@ ResearchEvent: TypeAlias = (
     | ScoutCompleted
     | ScoutFailed
     | ReviewAutoConfirmed
-    | IdeaCycleStarted
-    | IdeaAgentDone
+    | RoleFailed
+    | ManagerCycleStarted
+    | HypothesisProposed
+    | ExperimentSpecCreated
+    | CriticReviewStarted
+    | FrontierSynced
+    | ExperimentPreflightFailed
     | ExperimentStarted
     | ExperimentCompleted
+    | EvidenceRecorded
+    | ClaimUpdated
+    | ReproductionRequested
+    | MemoryUpdated
     | NoPendingIdeas
     | LimitReached
     | CrashLimitReached
     | PhaseTransition
     | AllIdeasProcessed
     | SessionCompleted
+    | SessionFailed
 )
 EventHandler = Callable[[ResearchEvent], None]
 
@@ -128,14 +209,32 @@ def event_name(event: ResearchEvent) -> str:
         return "scout_failed"
     if isinstance(event, ReviewAutoConfirmed):
         return "auto_confirmed"
-    if isinstance(event, IdeaCycleStarted):
-        return "idea_cycle_started"
-    if isinstance(event, IdeaAgentDone):
-        return "idea_agent_done"
+    if isinstance(event, RoleFailed):
+        return "role_failed"
+    if isinstance(event, ManagerCycleStarted):
+        return "manager_cycle_started"
+    if isinstance(event, HypothesisProposed):
+        return "hypothesis_proposed"
+    if isinstance(event, ExperimentSpecCreated):
+        return "experiment_spec_created"
+    if isinstance(event, CriticReviewStarted):
+        return "critic_review_started"
+    if isinstance(event, FrontierSynced):
+        return "frontier_synced"
+    if isinstance(event, ExperimentPreflightFailed):
+        return "experiment_preflight_failed"
     if isinstance(event, ExperimentStarted):
         return "experiment_started"
     if isinstance(event, ExperimentCompleted):
         return "experiment_completed"
+    if isinstance(event, EvidenceRecorded):
+        return "evidence_recorded"
+    if isinstance(event, ClaimUpdated):
+        return "claim_updated"
+    if isinstance(event, ReproductionRequested):
+        return "reproduction_requested"
+    if isinstance(event, MemoryUpdated):
+        return "memory_updated"
     if isinstance(event, NoPendingIdeas):
         return "no_pending_ideas"
     if isinstance(event, LimitReached):
@@ -148,6 +247,8 @@ def event_name(event: ResearchEvent) -> str:
         return "all_ideas_processed"
     if isinstance(event, SessionCompleted):
         return "session_completed"
+    if isinstance(event, SessionFailed):
+        return "session_failed"
     raise TypeError(f"Unsupported event type: {type(event)!r}")
 
 
@@ -159,15 +260,25 @@ def event_phase(event: ResearchEvent) -> PhaseName:
         return "scouting"
     if isinstance(event, ReviewAutoConfirmed):
         return "reviewing"
+    if isinstance(event, RoleFailed):
+        return "experimenting"
     if isinstance(event, AgentOutput):
         return event.phase
     if isinstance(
         event,
         (
-            IdeaCycleStarted,
-            IdeaAgentDone,
+            ManagerCycleStarted,
+            HypothesisProposed,
+            ExperimentSpecCreated,
+            CriticReviewStarted,
+            FrontierSynced,
+            ExperimentPreflightFailed,
             ExperimentStarted,
             ExperimentCompleted,
+            EvidenceRecorded,
+            ClaimUpdated,
+            ReproductionRequested,
+            MemoryUpdated,
             NoPendingIdeas,
             LimitReached,
             CrashLimitReached,
@@ -175,14 +286,14 @@ def event_phase(event: ResearchEvent) -> PhaseName:
         ),
     ):
         return "experimenting"
-    if isinstance(event, (AllIdeasProcessed, SessionCompleted)):
+    if isinstance(event, (AllIdeasProcessed, SessionCompleted, SessionFailed)):
         return "done"
     raise TypeError(f"Unsupported event type: {type(event)!r}")
 
 
 def event_level(event: ResearchEvent) -> LogLevel:
     """Return the default log level for an event."""
-    if isinstance(event, (ScoutFailed, CrashLimitReached)):
+    if isinstance(event, (ScoutFailed, RoleFailed, CrashLimitReached, ExperimentPreflightFailed, SessionFailed)):
         return "error"
     return "info"
 
@@ -201,18 +312,81 @@ def event_payload(event: ResearchEvent) -> dict:
         return {"exit_code": event.exit_code}
     if isinstance(event, ScoutFailed):
         return {"exit_code": event.exit_code}
-    if isinstance(event, IdeaCycleStarted):
+    if isinstance(event, RoleFailed):
+        return {"role": event.role, "exit_code": event.exit_code}
+    if isinstance(event, ManagerCycleStarted):
         return {"cycle": event.cycle}
-    if isinstance(event, IdeaAgentDone):
-        return {"cycle": event.cycle, "exit_code": event.exit_code}
+    if isinstance(event, HypothesisProposed):
+        payload = {"count": event.count}
+        if event.hypothesis_ids:
+            payload["hypothesis_ids"] = event.hypothesis_ids
+        return payload
+    if isinstance(event, ExperimentSpecCreated):
+        payload = {"count": event.count}
+        if event.experiment_spec_ids:
+            payload["experiment_spec_ids"] = event.experiment_spec_ids
+        return payload
+    if isinstance(event, CriticReviewStarted):
+        return {"stage": event.stage}
+    if isinstance(event, FrontierSynced):
+        payload = {"frontier_items": event.frontier_items}
+        if event.items:
+            payload["items"] = event.items
+        return payload
+    if isinstance(event, ExperimentPreflightFailed):
+        payload = {"rejected_count": event.rejected_count}
+        if event.items:
+            payload["items"] = event.items
+        return payload
     if isinstance(event, ExperimentStarted):
-        return {
+        payload = {
             "experiment_num": event.experiment_num,
             "max_experiments": event.max_experiments,
+            "frontier_id": event.frontier_id,
+            "idea_id": event.idea_id,
+            "execution_id": event.execution_id,
+            "hypothesis_id": event.hypothesis_id,
+            "experiment_spec_id": event.experiment_spec_id,
+            "selection_reason_code": event.selection_reason_code,
+            "reason_code": event.selection_reason_code,
         }
+        return {key: value for key, value in payload.items() if value not in {"", None}}
     if isinstance(event, ExperimentCompleted):
-        return {
+        payload = {
             "experiment_num": event.experiment_num,
+            "exit_code": event.exit_code,
+            "frontier_id": event.frontier_id,
+            "idea_id": event.idea_id,
+            "execution_id": event.execution_id,
+            "hypothesis_id": event.hypothesis_id,
+            "experiment_spec_id": event.experiment_spec_id,
+            "selection_reason_code": event.selection_reason_code,
+            "reason_code": event.selection_reason_code,
+        }
+        return {key: value for key, value in payload.items() if value not in {"", None}}
+    if isinstance(event, EvidenceRecorded):
+        payload = {"evidence_created": event.evidence_created}
+        if event.items:
+            payload["items"] = event.items
+        return payload
+    if isinstance(event, ClaimUpdated):
+        payload = {"count": event.count}
+        if event.items:
+            payload["items"] = event.items
+        return payload
+    if isinstance(event, ReproductionRequested):
+        payload = {"count": event.count}
+        if event.items:
+            payload["items"] = event.items
+        return payload
+    if isinstance(event, MemoryUpdated):
+        return {
+            "ideation_memory": event.ideation_memory,
+            "experiment_memory": event.experiment_memory,
+        }
+    if isinstance(event, SessionFailed):
+        return {
+            "failed_role": event.failed_role,
             "exit_code": event.exit_code,
         }
     if isinstance(event, LimitReached):

@@ -59,6 +59,11 @@ class IdeaBacklog:
         idea["finished_at"] = datetime.now(timezone.utc).isoformat()
         self._clear_parallel_runtime_state(idea)
 
+    def _clear_terminal_status(self, idea: dict) -> None:
+        idea.pop("finished_at", None)
+        idea.pop("finished_claim_token", None)
+        idea.pop("finished_claim_token_seq", None)
+
     # ---- public serial backlog API ----------------------------------------
 
     def add(
@@ -100,8 +105,10 @@ class IdeaBacklog:
                 if idea["id"] == idea_id:
                     idea["status"] = status
                     self._clear_parallel_runtime_state(idea)
-                    if status in {"done", "skipped", "pending"}:
+                    if status in {"done", "skipped"}:
                         self._finalize_terminal_status(idea)
+                    elif status == "pending":
+                        self._clear_terminal_status(idea)
                     return True
             return False
 
@@ -200,10 +207,13 @@ class IdeaPool(IdeaBacklog):
                 idea["status"] = status
                 if experiment is not None:
                     idea["assigned_experiment"] = experiment
-                if status in {"done", "skipped", "pending"}:
+                if status in {"done", "skipped"}:
                     idea["finished_at"] = datetime.now(timezone.utc).isoformat()
                     idea["finished_claim_token"] = idea.get("claim_token")
                     idea["finished_claim_token_seq"] = idea.get("claim_token_seq")
+                    self._clear_live_parallel_runtime_state(idea)
+                elif status == "pending":
+                    self._clear_terminal_status(idea)
                     self._clear_live_parallel_runtime_state(idea)
                 return True
             return False
