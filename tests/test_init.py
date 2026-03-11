@@ -41,6 +41,7 @@ def test_init_creates_research_directory():
         assert (research / "critic_program.md").is_file()
         assert (research / "experiment_program.md").is_file()
         assert (research / "results.tsv").is_file()
+        assert (research / "final_results.tsv").is_file()
         assert (research / "scripts" / "record.py").is_file()
         assert (research / "scripts" / "rollback.sh").is_file()
 
@@ -50,6 +51,8 @@ def test_init_creates_research_directory():
         # Check results.tsv has header
         results = (research / "results.tsv").read_text()
         assert results.startswith("timestamp\t")
+        final_results = (research / "final_results.tsv").read_text()
+        assert final_results.startswith("timestamp\t")
 
         # Check rollback.sh is executable
         assert os.access(research / "scripts" / "rollback.sh", os.X_OK)

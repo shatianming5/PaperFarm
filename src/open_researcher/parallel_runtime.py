@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -27,6 +28,20 @@ class ParallelRuntimeProfile:
     gpu_allocation: bool
     failure_memory: bool
     worktree_isolation: bool
+
+
+def resolve_parallel_worker_count(cfg: ResearchConfig) -> tuple[int, str | None]:
+    """Resolve the effective worker count for the current runtime environment."""
+    requested = max(int(cfg.max_workers or 0), 1)
+    pinned_cuda = str(os.environ.get("CUDA_VISIBLE_DEVICES", "")).strip()
+    if requested > 1 and pinned_cuda and not cfg.enable_gpu_allocation:
+        reason = (
+            "Externally pinned CUDA_VISIBLE_DEVICES without internal GPU allocation "
+            "would run multiple workers on the same GPU; clamping to 1 worker to "
+            "avoid confounded benchmark measurements."
+        )
+        return 1, reason
+    return requested, None
 
 
 def resolve_parallel_runtime_profile(cfg: ResearchConfig) -> ParallelRuntimeProfile:
@@ -97,6 +112,7 @@ def run_parallel_experiment_batch(
     idea_pool = IdeaPool(research_dir / "idea_pool.json")
     before = idea_pool.summary()
     profile, plugins = build_parallel_worker_plugins(repo_path, research_dir, cfg)
+    effective_workers, clamp_reason = resolve_parallel_worker_count(cfg)
     batch_started = 0
     batch_finished = 0
     failed_runs = 0
@@ -126,7 +142,7 @@ def run_parallel_experiment_batch(
         gpu_manager=None,
         idea_pool=idea_pool,
         agent_factory=agent_factory,
-        max_workers=cfg.max_workers,
+        max_workers=effective_workers,
         on_output=on_output,
         runtime_plugins=plugins,
         stop_event=stop,
@@ -142,6 +158,8 @@ def run_parallel_experiment_batch(
         f"failure_memory={profile.failure_memory}, "
         f"worktree={profile.worktree_isolation})"
     )
+    if clamp_reason is not None:
+        on_output(f"[system] {clamp_reason}")
 
     if before.get("pending", 0) <= 0:
         return {"experiments_completed": 0, "exit_code": 0, "failed_runs": 0, "started_runs": 0}

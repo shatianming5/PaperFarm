@@ -112,3 +112,58 @@ def test_record_creates_header_if_missing():
         lines = results_file.read_text().strip().split("\n")
         assert len(lines) == 2  # header + 1 row
         assert lines[0].startswith("timestamp\t")
+
+
+def test_record_auto_harvests_eval_output_metrics():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmpdir, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmpdir, capture_output=True)
+        Path(tmpdir, "dummy.txt").write_text("hello")
+        subprocess.run(["git", "add", "."], cwd=tmpdir, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmpdir, capture_output=True)
+
+        research_dir = Path(tmpdir, ".research")
+        research_dir.mkdir()
+        (research_dir / "eval_output.log").write_text(
+            "max_abs_diff=0.000000\n"
+            "torch_ms=4.5055\n"
+            "cpp_ms=4.2402\n"
+            "speedup_ratio=1.0626\n"
+            "invalid_reason=\n"
+        )
+        results_file = research_dir / "results.tsv"
+        results_file.write_text(
+            "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+        )
+
+        target_script = research_dir / "scripts" / "record.py"
+        target_script.parent.mkdir(parents=True, exist_ok=True)
+        target_script.write_text(RECORD_SCRIPT.read_text())
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(target_script),
+                "--metric",
+                "speedup_ratio",
+                "--value",
+                "1.0626",
+                "--status",
+                "keep",
+                "--desc",
+                "idea-001",
+            ],
+            cwd=tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+        rows = list(csv.DictReader(results_file.open(), delimiter="\t"))
+        secondary = json.loads(rows[0]["secondary_metrics"])
+        assert secondary["max_abs_diff"] == 0.0
+        assert secondary["torch_ms"] == 4.5055
+        assert secondary["cpp_ms"] == 4.2402
+        assert secondary["invalid_reason"] == ""
+        assert "speedup_ratio" not in secondary

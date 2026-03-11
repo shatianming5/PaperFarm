@@ -8,12 +8,26 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from open_researcher.storage import atomic_write_text
+
 
 def _safe_float(value) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_json_object(raw: object) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json_mod.loads(raw)
+    except (TypeError, ValueError, json_mod.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def load_results(repo_path: Path) -> list[dict]:
@@ -25,6 +39,102 @@ def load_results(repo_path: Path) -> list[dict]:
             return list(csv.DictReader(f, delimiter="\t"))
     except (OSError, UnicodeDecodeError):
         return []
+
+
+def derive_final_results(repo_path: Path) -> list[dict]:
+    """Overlay critic/evidence verdicts onto raw result rows."""
+    rows = load_results(repo_path)
+    graph_path = repo_path / ".research" / "research_graph.json"
+    if not graph_path.exists():
+        return []
+    try:
+        graph = json_mod.loads(graph_path.read_text())
+    except (OSError, ValueError, json_mod.JSONDecodeError):
+        return []
+
+    evidence_by_key: dict[tuple[str, str], dict] = {}
+    for row in graph.get("evidence", []):
+        if not isinstance(row, dict):
+            continue
+        key = (
+            str(row.get("frontier_id", "")).strip(),
+            str(row.get("execution_id", "")).strip(),
+        )
+        if any(key):
+            evidence_by_key[key] = row
+
+    claim_by_key: dict[tuple[str, str], dict] = {}
+    for row in graph.get("claim_updates", []):
+        if not isinstance(row, dict):
+            continue
+        key = (
+            str(row.get("frontier_id", "")).strip(),
+            str(row.get("execution_id", "")).strip(),
+        )
+        if any(key):
+            claim_by_key[key] = row
+
+    derived: list[dict] = []
+    for row in rows:
+        secondary = _safe_json_object(row.get("secondary_metrics"))
+        trace = _safe_json_object(secondary.get("_open_researcher_trace"))
+        frontier_id = str(trace.get("frontier_id", "")).strip()
+        execution_id = str(trace.get("execution_id", "")).strip()
+        evidence = evidence_by_key.get((frontier_id, execution_id), {})
+        claim = claim_by_key.get((frontier_id, execution_id), {})
+        final_status = str(row.get("status", "")).strip()
+        evidence_reliability = str(evidence.get("reliability", "")).strip()
+        critic_reason_code = ""
+        critic_reason = ""
+        if claim:
+            final_status = str(claim.get("transition", "")).strip() or final_status
+            critic_reason_code = str(claim.get("reason_code", "")).strip()
+            critic_reason = str(claim.get("reason", "")).strip()
+        elif evidence_reliability and evidence_reliability not in {"pending_critic", "strong"}:
+            final_status = evidence_reliability
+            critic_reason_code = str(evidence.get("reason_code", "")).strip()
+        derived.append(
+            {
+                "timestamp": row.get("timestamp", ""),
+                "commit": row.get("commit", ""),
+                "primary_metric": row.get("primary_metric", ""),
+                "metric_value": row.get("metric_value", ""),
+                "raw_status": row.get("status", ""),
+                "final_status": final_status,
+                "evidence_reliability": evidence_reliability,
+                "critic_reason_code": critic_reason_code,
+                "critic_reason": critic_reason,
+                "description": row.get("description", ""),
+                "frontier_id": frontier_id,
+                "execution_id": execution_id,
+            }
+        )
+    return derived
+
+
+def write_final_results_tsv(repo_path: Path) -> None:
+    """Write a derived critic-aware results view to .research/final_results.tsv."""
+    header = [
+        "timestamp",
+        "commit",
+        "primary_metric",
+        "metric_value",
+        "raw_status",
+        "final_status",
+        "evidence_reliability",
+        "critic_reason_code",
+        "critic_reason",
+        "description",
+        "frontier_id",
+        "execution_id",
+    ]
+    rows = derive_final_results(repo_path)
+    lines = ["\t".join(header)]
+    for row in rows:
+        values = [str(row.get(key, "")) for key in header]
+        escaped = ['"' + value.replace('"', '""') + '"' if "\t" in value or "\n" in value else value for value in values]
+        lines.append("\t".join(escaped))
+    atomic_write_text(repo_path / ".research" / "final_results.tsv", "\n".join(lines) + "\n")
 
 
 def print_results(repo_path: Path) -> None:

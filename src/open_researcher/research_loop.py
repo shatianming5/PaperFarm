@@ -9,6 +9,7 @@ from pathlib import Path
 
 from filelock import FileLock
 
+from open_researcher.activity import ActivityMonitor
 from open_researcher.config import ResearchConfig
 from open_researcher.crash_counter import CrashCounter
 from open_researcher.phase_gate import PhaseGate
@@ -39,7 +40,7 @@ from open_researcher.research_events import (
     ScoutFailed,
     ScoutStarted,
 )
-from open_researcher.results_cmd import load_results
+from open_researcher.results_cmd import load_results, write_final_results_tsv
 from open_researcher.storage import locked_read_json
 from open_researcher.watchdog import TimeoutWatchdog
 
@@ -670,6 +671,7 @@ class ResearchLoop:
         phase_gate = PhaseGate(self.research_dir, self.cfg.mode)
         graph_store = ResearchGraphStore(self.research_dir / "research_graph.json")
         memory_store = ResearchMemoryStore(self.research_dir / "research_memory.json")
+        activity_monitor = ActivityMonitor(self.research_dir)
         graph_store.ensure_exists()
         memory_store.ensure_exists()
 
@@ -798,8 +800,21 @@ class ResearchLoop:
                     items=frontier_sync.get("items"),
                 )
             )
+            if frontier_sync["frontier_items"] > 0:
+                activity_monitor.update(
+                    "experiment_agent",
+                    status="queued",
+                    detail=f"{frontier_sync['frontier_items']} frontier item(s) ready for execution",
+                    idea="",
+                )
 
             if not graph_store.has_executable_frontier():
+                activity_monitor.update(
+                    "experiment_agent",
+                    status="idle",
+                    detail="no executable frontier items",
+                    idea="",
+                )
                 self.emit(NoPendingIdeas())
                 finished_all = True
                 break
@@ -849,6 +864,7 @@ class ResearchLoop:
                         items=absorb.get("items"),
                     )
                 )
+            write_final_results_tsv(self.repo_path)
 
             if graph_store.has_frontier_status(graph_store.POST_REVIEW_FRONTIER_STATUSES):
                 control_action = self._enforce_runtime_controls(
@@ -898,6 +914,22 @@ class ResearchLoop:
                         items=frontier_sync.get("items"),
                     )
                 )
+                if frontier_sync["frontier_items"] > 0:
+                    activity_monitor.update(
+                        "experiment_agent",
+                        status="queued",
+                        detail=(
+                            f"{frontier_sync['frontier_items']} frontier item(s) queued after critic review"
+                        ),
+                        idea="",
+                    )
+                else:
+                    activity_monitor.update(
+                        "experiment_agent",
+                        status="idle",
+                        detail="no pending ideas after critic review",
+                        idea="",
+                    )
                 if any(
                     [
                         self.cfg.enable_repo_type_prior,
@@ -918,6 +950,7 @@ class ResearchLoop:
                             experiment_memory=memory_result["experiment_memory"],
                         )
                     )
+                write_final_results_tsv(self.repo_path)
 
             if stop_reason is not None:
                 self.last_stop_reason = self.last_stop_reason or stop_reason

@@ -69,10 +69,11 @@ Treat those fields as the authoritative execution contract.
 1. Read `.research/evaluation.md` for the evaluation command
 2. Run the evaluation command to establish baseline performance
 3. Extract the primary metric value
-4. Record: `python .research/scripts/record.py --metric <name> --value <val> --status keep --desc "baseline"`
-5. Git commit: `git add -A && git commit -m "baseline: <metric>=<value>"`
-6. **Update progress**: write `{"phase": "experimenting"}` to `.research/experiment_progress.json`
-7. **Continue immediately to Phase 3** — do not exit
+4. Keep `.research/eval_output.log` intact until after recording. `record.py` auto-harvests scalar `key=value` fields from that log as secondary metrics.
+5. Record: `python .research/scripts/record.py --metric <name> --value <val> --status keep --desc "baseline"`
+6. Git commit: `git add -A && git commit -m "baseline: <metric>=<value>"`
+7. **Update progress**: write `{"phase": "experimenting"}` to `.research/experiment_progress.json`
+8. **Continue immediately to Phase 3** — do not exit
 
 ## Phase 3: Experiment Loop (when progress.phase == "experimenting")
 
@@ -118,6 +119,7 @@ In research-v1 mode:
 - Run the evaluation command from `.research/evaluation.md`
 - If the selected row or linked spec contains a specific `evaluation_plan`, follow it as long as it is consistent with the repo and current evaluation file
 - Extract the primary metric value
+- Do not delete or overwrite `.research/eval_output.log` before recording. `record.py` will automatically persist scalar correctness and timing fields from that log.
 
 ### 3f. Record & Decide
 
@@ -142,5 +144,6 @@ In research-v1 mode:
 - **Never** generate ideas — that is the manager's job
 - **Always** update `activity.json` before each action
 - **One experiment at a time** — finish current before starting next
+- Treat `.research/eval_output.log` as the authoritative evaluation artifact for the current run and persist the result immediately after each evaluation.
 - Keep code changes small and reversible
 - In `research-v1`, execute the linked spec faithfully; do not reinterpret it into a broader refactor

@@ -91,6 +91,12 @@ def do_init(repo_path: Path, tag: str | None = None) -> None:
     # Create results.tsv with header
     header = "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
     (research_dir / "results.tsv").write_text(header)
+    final_header = (
+        "timestamp\tcommit\tprimary_metric\tmetric_value\traw_status\tfinal_status\t"
+        "evidence_reliability\tcritic_reason_code\tcritic_reason\tdescription\t"
+        "frontier_id\texecution_id\n"
+    )
+    (research_dir / "final_results.tsv").write_text(final_header)
 
     (research_dir / "idea_pool.json").write_text(json.dumps({"ideas": []}, indent=2))
     (research_dir / "activity.json").write_text("{}")

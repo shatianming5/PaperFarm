@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from filelock import FileLock
+
+SCALAR_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def get_git_short_hash() -> str:
@@ -25,11 +28,67 @@ def get_git_short_hash() -> str:
     return result.stdout.strip()
 
 
+def _coerce_scalar(value: str):
+    stripped = value.strip()
+    if not stripped:
+        return ""
+    lowered = stripped.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        if any(ch in stripped for ch in [".", "e", "E"]):
+            return float(stripped)
+        return int(stripped)
+    except ValueError:
+        return stripped
+
+
+def _load_auto_secondary_metrics(
+    research_dir: Path,
+    *,
+    primary_metric: str,
+    explicit_secondary: dict,
+    override_path: str = "",
+) -> dict:
+    log_path = Path(override_path) if override_path else None
+    if log_path is None:
+        env_path = str(os.environ.get("OPEN_RESEARCHER_EVAL_LOG", "")).strip()
+        log_path = Path(env_path) if env_path else research_dir / "eval_output.log"
+    if not log_path.is_absolute():
+        log_path = (Path.cwd() / log_path).resolve()
+    if not log_path.exists():
+        return {}
+
+    metrics: dict[str, object] = {}
+    for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if (
+            not key
+            or key == primary_metric
+            or key in explicit_secondary
+            or key.startswith("_open_researcher_")
+            or not SCALAR_KEY_RE.match(key)
+        ):
+            continue
+        metrics[key] = _coerce_scalar(value)
+    return metrics
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record experiment result")
     parser.add_argument("--metric", required=True, help="Primary metric name")
     parser.add_argument("--value", required=True, type=float, help="Metric value")
     parser.add_argument("--secondary", default="{}", help="Secondary metrics as JSON")
+    parser.add_argument(
+        "--secondary-from-log",
+        default="",
+        help="Optional eval log to auto-harvest scalar key=value metrics from",
+    )
     parser.add_argument("--status", required=True, choices=["keep", "discard", "crash"], help="Experiment status")
     parser.add_argument("--desc", required=True, help="Brief description")
     args = parser.parse_args()
@@ -65,7 +124,17 @@ def main():
         print("[ERROR] Failed to determine git root. Are you in a git repository?", file=sys.stderr)
         raise SystemExit(1)
     git_root = git_root_result.stdout.strip()
-    results_path = Path(git_root) / ".research" / "results.tsv"
+    research_dir = Path(git_root) / ".research"
+    results_path = research_dir / "results.tsv"
+    auto_secondary = _load_auto_secondary_metrics(
+        research_dir,
+        primary_metric=args.metric,
+        explicit_secondary=secondary,
+        override_path=args.secondary_from_log,
+    )
+    merged_secondary = dict(auto_secondary)
+    merged_secondary.update(secondary)
+    secondary = merged_secondary
 
     header = ["timestamp", "commit", "primary_metric", "metric_value", "secondary_metrics", "status", "description"]
 

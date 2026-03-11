@@ -2,7 +2,12 @@ import json
 import tempfile
 from pathlib import Path
 
-from open_researcher.results_cmd import load_results, print_results
+from open_researcher.results_cmd import (
+    derive_final_results,
+    load_results,
+    print_results,
+    write_final_results_tsv,
+)
 
 
 def test_load_results():
@@ -100,3 +105,76 @@ def test_results_chart_empty(tmp_path, capsys):
     print_results_chart(tmp_path)
     captured = capsys.readouterr()
     assert "No results" in captured.out
+
+
+def test_derive_final_results_overlays_critic_verdicts(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+        "2026-03-08T10:00:00\ta1b2c3d\tspeedup_ratio\t1.062600\t"
+        "\"{\"\"_open_researcher_trace\"\":{\"\"frontier_id\"\":\"\"frontier-002\"\",\"\"execution_id\"\":\"\"exec-002\"\"}}\"\tkeep\tidea-002\n"
+    )
+    (research / "research_graph.json").write_text(
+        json.dumps(
+            {
+                "version": "research-v1",
+                "repo_profile": {},
+                "hypotheses": [],
+                "experiment_specs": [],
+                "frontier": [],
+                "branch_relations": [],
+                "evidence": [
+                    {
+                        "id": "evi-002",
+                        "frontier_id": "frontier-002",
+                        "execution_id": "exec-002",
+                        "reliability": "needs_repro",
+                        "reason_code": "result_observed",
+                    }
+                ],
+                "claim_updates": [
+                    {
+                        "id": "claim-002",
+                        "frontier_id": "frontier-002",
+                        "execution_id": "exec-002",
+                        "transition": "needs_repro",
+                        "reason_code": "supported_but_needs_repro",
+                        "reason": "Single run improved benchmark but attribution is still weak",
+                    }
+                ],
+                "counters": {},
+            }
+        )
+    )
+    derived = derive_final_results(tmp_path)
+    assert len(derived) == 1
+    assert derived[0]["raw_status"] == "keep"
+    assert derived[0]["final_status"] == "needs_repro"
+    assert derived[0]["critic_reason_code"] == "supported_but_needs_repro"
+
+
+def test_write_final_results_tsv(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "results.tsv").write_text(
+        "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n"
+    )
+    (research / "research_graph.json").write_text(
+        json.dumps(
+            {
+                "version": "research-v1",
+                "repo_profile": {},
+                "hypotheses": [],
+                "experiment_specs": [],
+                "frontier": [],
+                "branch_relations": [],
+                "evidence": [],
+                "claim_updates": [],
+                "counters": {},
+            }
+        )
+    )
+    write_final_results_tsv(tmp_path)
+    final_results = (research / "final_results.tsv").read_text()
+    assert final_results.startswith("timestamp\tcommit\tprimary_metric\tmetric_value\traw_status\tfinal_status\t")
