@@ -24,9 +24,9 @@
 
 - **🤖 Multi-Agent Support**: Works with Claude Code, Codex CLI, Aider, and OpenCode — auto-detects the first installed agent, or pick your own.
 
-- **🔬 Scout → Review → Experiment Flow**: AI agent analyzes your codebase, searches related work, designs evaluation metrics, then runs experiments — keeping what works, discarding what doesn't.
+- **🔬 Scout → Prepare → Review → Experiment Flow**: AI agent analyzes your codebase, resolves install/data/smoke bootstrap steps, then runs the `research-v1` loop — keeping what works, discarding what doesn't.
 
-- **📊 Rich 5-Tab TUI Dashboard**: Real-time stats, idea pool, metric trend charts, live agent logs with diff coloring, and auto-refreshing docs — all in your terminal.
+- **🖥️ Research Command Center TUI**: A 4-tab `Command / Execution / Logs / Docs` dashboard with frontier focus, collapsible detail drawer, hypothesis lineage, trace-aware logs, and searchable docs navigation.
 
 - **🛡️ Safety First**: Every experiment is an isolated git commit. Failed experiments auto-rollback. Timeout watchdog, crash counter, and max-experiments limit keep things under control.
 
@@ -49,11 +49,19 @@ cd your-project
 open-researcher run
 ```
 
-This launches a **3-phase flow**:
+This launches a **4-phase flow**:
 
 1. **Scout** — AI agent analyzes your codebase, searches related work, designs evaluation metrics
-2. **Review** — You review the analysis in an interactive TUI and confirm or edit the plan
-3. **Experiment** — Agent runs experiments autonomously, keeping what improves metrics
+2. **Prepare** — Open Researcher resolves a local Python env, install command, data/setup step, and a readiness smoke check
+3. **Review** — You review the analysis and prepare results in an interactive TUI, then confirm or edit the plan
+4. **Experiment** — `Manager -> Critic -> Experiment` runs the research loop autonomously, keeping what improves metrics
+
+If you want to inspect exactly what `run` will use before it touches the repo, use:
+
+```bash
+open-researcher run --dry-run
+open-researcher doctor
+```
 
 ### Headless Mode
 
@@ -67,6 +75,7 @@ Outputs structured **JSON Lines** to stdout, one event per line:
 
 ```json
 {"ts": "2026-03-10T12:34:56Z", "level": "info", "phase": "scouting", "event": "scout_started"}
+{"ts": "2026-03-10T12:40:00Z", "level": "info", "phase": "preparing", "event": "prepare_step_completed", "step": "smoke", "status": "completed"}
 {"ts": "2026-03-10T12:45:00Z", "level": "info", "phase": "experimenting", "event": "experiment_completed", "idea": "idea-001", "metric_value": 0.95, "experiment_num": 3, "max_experiments": 20}
 {"ts": "2026-03-10T12:50:00Z", "level": "info", "phase": "done", "event": "limit_reached", "detail": "Max experiments (20) reached"}
 ```
@@ -104,11 +113,13 @@ Open Researcher generates a `.research/` directory in your repo with everything 
 | `manager_program.md` | Research manager instructions — hypothesis and frontier policy |
 | `critic_program.md` | Research critic instructions — falsification and evidence review |
 | `experiment_program.md` | Experiment agent instructions — run & evaluate |
-| `config.yaml` | Mode, metrics, timeout, experiment limits, agent settings |
+| `config.yaml` | Mode, metrics, timeout, experiment limits, agent settings, and `bootstrap.*` overrides |
 | `project-understanding.md` | Agent fills: what the project does |
 | `research-strategy.md` | Agent fills: research direction and focus areas |
 | `literature.md` | Agent fills: related work and prior art |
 | `evaluation.md` | Agent fills: how to measure improvement |
+| `bootstrap_state.json` | Canonical install/data/smoke state for repo readiness |
+| `prepare.log` | Raw logs from env install, data prep, and smoke execution |
 | `idea_pool.json` | Projected experiment backlog with priority, status, and worker claim metadata |
 | `results.tsv` | Experiment log (timestamp, commit, metrics, status) |
 | `events.jsonl` | Canonical runtime event stream for research + control |
@@ -120,7 +131,7 @@ Open Researcher generates a `.research/` directory in your repo with everything 
 </details>
 
 <details>
-<summary><b>🔄 The Scout → Review → Experiment Flow</b></summary>
+<summary><b>🔄 The Scout → Prepare → Review → Experiment Flow</b></summary>
 <br/>
 
 ```
@@ -134,13 +145,20 @@ Phase 2: Scout Analysis
   ├─ Read codebase → project-understanding.md
   ├─ Search related work → literature.md
   ├─ Define strategy → research-strategy.md
-  └─ Design evaluation → evaluation.md + config.yaml
+  └─ Design evaluation + bootstrap hints → evaluation.md + config.yaml
 
-Phase 3: Human Review (TUI only, auto-confirmed in headless)
+Phase 3: Repository Prepare
+  ├─ Resolve local Python env
+  ├─ Resolve install_command / data_command / smoke_command
+  ├─ Run install/data/smoke with logs in .research/prepare.log
+  └─ Persist readiness state in .research/bootstrap_state.json
+
+Phase 4: Human Review (TUI only, auto-confirmed in headless)
   ├─ Review all Scout outputs
+  ├─ Review bootstrap resolution and readiness
   └─ Confirm, edit, or re-analyze
 
-Phase 4: Research-v1 Loop
+Phase 5: Research-v1 Loop
   ├─ Manager proposes/refines hypotheses and frontier rows
   ├─ Critic reviews experiment specs before execution
   ├─ Experiment agent implements, tests, and evaluates → results.tsv
@@ -149,6 +167,21 @@ Phase 4: Research-v1 Loop
 ```
 
 Each experiment is a git commit. Successful experiments stay; failed ones are rolled back. Everything is logged in `results.tsv`.
+
+</details>
+
+<details>
+<summary><b>🧰 Auto-Prepare Resolution Rules</b></summary>
+<br/>
+
+`open-researcher run` now tries to make a local Python repo runnable before the research loop starts.
+
+- **Python env priority**: explicit `bootstrap.python` → active virtualenv → repo `.venv` → auto-create `.venv`
+- **Install priority**: explicit `bootstrap.install_command` → `uv sync` → `poetry install` → `python -m pip install -r requirements.txt` → `python -m pip install -e .`
+- **Data/setup priority**: explicit `bootstrap.data_command` → `make setup|prepare|data|download-data` → `scripts/prepare*.py` / `scripts/download*.py` / `data/*/prepare.py`
+- **Smoke priority**: explicit `bootstrap.smoke_command` → first runnable command block from `.research/evaluation.md` → `pytest -q` → `make test`
+
+If a command cannot be resolved safely, `run` stops before the review/runtime stage and records the failure in `.research/bootstrap_state.json`.
 
 </details>
 
@@ -207,39 +240,75 @@ agents:
 
 ## 📊 Interactive TUI Dashboard
 
+The interactive UI is now a **research-v1 command center**, not a generic tabbed monitor. It is built around the real runtime objects in `.research/`: frontier rows, hypotheses, evidence, claims, control state, and the shared event stream.
+
+### Screenshots
+
+<p align="center">
+  <img src="imgs/overview.png" alt="Open Researcher overview dashboard" width="100%" />
+</p>
+<p align="center"><em>Overview</em>: research command center with frontier focus, lineage, and live role activity.</p>
+
+<p align="center">
+  <img src="imgs/execution.png" alt="Open Researcher execution dashboard" width="100%" />
+</p>
+<p align="center"><em>Execution</em>: metric trend, run summary, and recent experiment results.</p>
+
+<p align="center">
+  <img src="imgs/docs.png" alt="Open Researcher docs dashboard" width="100%" />
+</p>
+<p align="center"><em>Docs</em>: searchable research documents with grouped navigation and live preview.</p>
+
 ```
-┌─ Open Researcher ──────────────────────────────────────────────────────┐
-│ Experiments: 15 │ Kept: 10 │ Discarded: 3 │ Crashed: 1 │ Best: 0.329 │
-├─ Overview ─ Ideas ─ Charts ─ Logs ─ Docs ──────────────────────────────┤
-│                                                                        │
-│  ▌ Experiment Agent  experimenting                                     │
-│  ▌ Running: sliding window attention (idea-003)                        │
-│  ▌ ████████████████████░░░░░░░░  62%  (5/8 ideas)                     │
-│                                                                        │
-│  Recent Experiments:                                                   │
-│  #15  final-tune      keep     val_loss=0.329  ↓ Fine-tune LR 1e-5    │
-│  #14  kv-cache        keep     val_loss=0.335  ↓ KV-cache optim       │
-│  #13  mixup-aug       discard  val_loss=0.355  ↑ MixUp augmentation   │
-│  #12  batch-x2        keep     val_loss=0.338  ↓ Double batch size    │
-│  #11  flash-attn      keep     val_loss=0.343  ↓ FlashAttention-2     │
-│                                                                        │
-│  [p]ause [r]esume [s]kip [a]dd idea [g]pu [q]uit                      │
+┌─ OPEN RESEARCHER ─ research-v1 ────────────────────────────────────────┐
+│ Research  branch main  frontier 3  best=0.3290                        │
+├─ Command ─ Execution ─ Logs ─ Docs ────────────────────────────────────┤
+│ Role Activity      │ Frontier Focus          │ Frontier Detail         │
+│ Research Manager   │ frontier-001 / exec-014 │ status / priority /     │
+│ Research Critic    │ hypothesis + spec       │ claim chips             │
+│ Experiment Agent   │ select a frontier       │ collapsible hypothesis  │
+│                    │ to inspect               │ spec / evidence / claim │
+│────────────────────┼─────────────────────────┼─────────────────────────│
+│ Research Graph     │ Lineage & Timeline      │ Docs sidebar + search   │
+│ hypotheses/specs   │ hypothesis tree         │ grouped by type         │
+│ evidence/claims    │ recent manager / critic │ recent docs + preview   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 <details>
-<summary><b>📑 5 Tabs & Keyboard Shortcuts</b></summary>
+<summary><b>📑 4 Tabs & Keyboard Shortcuts</b></summary>
 <br/>
 
-**5 tabs**:
+**4 tabs**:
 
-- **Overview** — Real-time stats, agent status with progress bar, recent results
-- **Ideas** — Idea pool with status, priority, category, metric values
-- **Charts** — Metric trend visualization with keep/discard/crash coloring
-- **Logs** — Live agent output with diff highlighting and thinking/acting phases
-- **Docs** — Auto-refreshing views of project understanding, literature, evaluation, ideas
+- **Command** — Session chrome, role activity, frontier focus, collapsible frontier detail drawer, graph summary, hypothesis lineage, recent timeline
+- **Execution** — Metric trend, baseline/current/best summary, recent results, execution focus
+- **Logs** — Trace-aware runtime log with `frontier_id / execution_id / reason_code`
+- **Docs** — Searchable docs workbench with grouped navigation, recent history, preview, and live document viewer
 
-**Keyboard shortcuts**: `1-5` switch tabs, `p` pause, `r` resume, `s` skip idea, `a` add idea, `g` GPU status, `q` quit.
+**Keyboard shortcuts**: `1-4` switch tabs, `p` pause, `r` resume, `s` skip frontier, `g` GPU status, `l` open run log, `q` quit.
+
+</details>
+
+<details>
+<summary><b>🔎 Command Page Highlights</b></summary>
+<br/>
+
+- **Frontier Focus** shows the top projected frontier rows ordered by runtime priority, not a separate editable idea pool.
+- **Frontier Detail Drawer** is selection-driven and includes collapsible sections for hypothesis, experiment spec, metric/evidence comparison, and claim updates.
+- **Metric & Evidence Compare** shows latest observed metric, best observed metric, baseline/current/global best references, and evidence reliability counts.
+- **Lineage & Timeline** combines branch relations from `research_graph.json` with the latest typed events from `events.jsonl`.
+
+</details>
+
+<details>
+<summary><b>📚 Docs Workbench Highlights</b></summary>
+<br/>
+
+- Documents are grouped by type: **Research State**, **Research Notes**, and **Role Programs**.
+- Search highlights matching text in titles, filenames, and previews.
+- Recent documents are tracked in-session so you can jump back to the last files you inspected.
+- Dynamic docs such as `research_graph.md`, `research_memory.md`, and `projected_backlog.md` are generated from canonical JSON state.
 
 </details>
 
@@ -318,10 +387,10 @@ make lint   # run linter
 
 | Command | What It Does |
 |:---|:---|
-| `ideas list` | List idea pool |
-| `ideas add "description"` | Add idea manually |
-| `ideas delete IDEA_ID` | Remove idea |
-| `ideas prioritize` | Re-prioritize ideas |
+| `ideas list` | Inspect the projected backlog currently derived from `research_graph.json` |
+| `ideas add "description"` | Compatibility command that now refuses mutation under `research-v1` |
+| `ideas delete IDEA_ID` | Compatibility command that now refuses mutation under `research-v1` |
+| `ideas prioritize` | Compatibility command that now refuses mutation under `research-v1` |
 
 </details>
 
@@ -362,19 +431,33 @@ metrics:
     direction: ""             # higher_is_better | lower_is_better
 
 environment: |
-  # Describe how to run commands for this project
-  # Local: just run commands directly
-  # Remote: ssh user@host "cd /path && ..."
-  # Docker: docker exec container_name ...
+  # Free-form notes for agents. Runtime execution uses bootstrap.* below.
+
+bootstrap:
+  auto_prepare: true          # run install/data/smoke before review/runtime
+  working_dir: "."            # relative to repo root
+  python: ""                  # explicit python path if needed
+  install_command: ""         # explicit dependency install command
+  data_command: ""            # explicit dataset/setup command
+  smoke_command: ""           # explicit readiness check command
+  expected_paths: []          # files/dirs that data/setup must materialize
+  requires_gpu: false         # fail prepare if GPU is required but unavailable
 
 research:
-  web_search: true            # let agent use web search if available
-  search_interval: 5          # refresh ideas every N experiments
+  protocol: research-v1
+  manager_batch_size: 3
+  critic_repro_policy: best_or_surprising
 
-runtime:
-  gpu_allocation: true        # advanced plugin: GPU scheduling/allocation
-  failure_memory: true        # advanced plugin: rank historical fixes
-  worktree_isolation: true    # advanced plugin: isolated git worktrees
+memory:
+  ideation: true
+  experiment: true
+  repo_type_prior: true
+
+roles:
+  scout_agent: ""             # optional override
+  manager_agent: ""           # optional override
+  critic_agent: ""            # optional override
+  experiment_agent: ""        # optional override
 
 gpu:
   remote_hosts: []            # optional remote GPU allocation hosts
@@ -425,8 +508,9 @@ agents:                       # per-agent overrides (optional)
 
 | Module | Description |
 |:---|:---|
-| `app.py` | Main Textual application, 5-tab layout |
-| `widgets.py` | UI components (Stats, Ideas, Charts, Logs, Docs) |
+| `app.py` | Main Textual application for the 4-tab research command center |
+| `widgets.py` | Command, execution, logs, docs, lineage, frontier, and detail drawer widgets |
+| `view_model.py` | TUI-specific aggregation layer from graph / memory / results / events into renderable state |
 | `review.py` | Post-Scout review TUI |
 | `modals.py` | Modal dialogs (AddIdea, GPUStatus, Log) |
 | `tui_runner.py` | Shared Textual session lifecycle for bootstrap and existing-workflow entrypoints |
@@ -441,7 +525,7 @@ agents:                       # per-agent overrides (optional)
 | Module | Description |
 |:---|:---|
 | `idea_pool.py` | Serial idea backlog plus parallel claim handling for workers |
-| `research_loop.py` | Shared Scout → Idea → Experiment core loop |
+| `research_loop.py` | Shared Scout → Manager → Critic → Experiment core loop |
 | `research_events.py` | Typed event contract shared by TUI and headless |
 | `event_journal.py` | Shared JSONL journal for runtime and control events |
 | `control_plane.py` | Runtime control (pause/resume/skip) |

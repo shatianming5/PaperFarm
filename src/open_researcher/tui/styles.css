@@ -1,71 +1,299 @@
 Screen {
-    background: $surface;
+    background: #060d15;
+    color: #d7e1f3;
 }
 
 #stats-bar {
     dock: top;
     height: auto;
-    max-height: 2;
-    background: $panel;
-    color: $text;
-    padding: 0 1;
+    min-height: 2;
+    background: #08111a;
+    color: #d7e1f3;
+    padding: 0 2;
+    border-bottom: solid #16324a;
 }
 
 #tabs {
     height: 1fr;
+    background: #060d15;
 }
 
 TabPane {
-    padding: 0 1;
+    padding: 1 2;
 }
 
-#exp-status {
-    height: auto;
-    min-height: 3;
-    max-height: 8;
-    border: tall $primary-background;
-    background: $panel;
-    padding: 0 1;
+.hero-card {
+    background: #0b1622;
+    border: tall #235174;
+    padding: 1 2;
+    margin-bottom: 1;
 }
 
+.panel-card {
+    background: #0d1823;
+    border: tall #1a3e59;
+    padding: 1 1;
+}
+
+.trace-card {
+    background: #0a1320;
+    border: tall #214967;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+.column {
+    height: 1fr;
+}
+
+#command-main,
+#execution-main {
+    height: 1fr;
+}
+
+#command-left {
+    height: 1fr;
+}
+
+#command-right {
+    height: 1fr;
+}
+
+#frontier-main {
+    height: 1fr;
+}
+
+#graph-summary,
+#role-activity,
+#lineage-timeline,
+#frontier-detail,
+#exp-status,
 #recent-exp {
     height: auto;
-    min-height: 3;
-    border: tall $primary-background;
-    background: $panel;
-    padding: 0 1;
-    margin-top: 1;
 }
 
-#idea-scroll {
+#role-activity,
+#graph-summary,
+#lineage-timeline,
+#recent-exp {
+    margin-bottom: 1;
+}
+
+#frontier-scroll {
     height: 1fr;
     overflow-y: auto;
 }
 
-#idea-list {
-    height: auto;
+#frontier-focus {
+    height: 1fr;
+}
+
+#frontier-detail {
+    height: 1fr;
+}
+
+#frontier-detail #frontier-detail-summary {
+    border-bottom: solid #16324a;
+    padding-bottom: 1;
+}
+
+#frontier-detail Collapsible {
+    border: tall #16324a;
+    background: #08111a;
+    margin-top: 1;
+}
+
+#frontier-detail .detail-block {
     padding: 0 1;
+}
+
+#execution-summary {
+    margin-bottom: 1;
 }
 
 #metric-chart {
     height: 1fr;
-    min-height: 10;
+    min-height: 18;
+}
+
+#execution-side {
+    height: 1fr;
+}
+
+#exp-status {
+    min-height: 8;
 }
 
 #agent-log {
     height: 1fr;
+    background: #08111a;
+    color: #d7e1f3;
+    border: tall #1a3e59;
+    padding: 0 1;
 }
 
 #doc-viewer {
     height: 1fr;
+    border: tall #1a3e59;
+    background: #08111a;
+    padding: 0 1;
+}
+
+#docs-main {
+    height: 1fr;
+}
+
+#docs-sidebar {
+    height: 1fr;
+    min-width: 32;
+    width: 38;
+    overflow-y: auto;
 }
 
 #hotkey-bar {
     dock: bottom;
-    height: 1;
-    background: $panel;
-    color: $text-muted;
-    padding: 0 1;
+    height: auto;
+    min-height: 1;
+    background: #08111a;
+    color: #95a6bd;
+    padding: 0 2;
+    border-top: solid #16324a;
+}
+
+.layout-wide #command-main {
+    layout: horizontal;
+}
+
+.layout-wide #command-left {
+    width: 34;
+    min-width: 34;
+}
+
+.layout-wide #command-right {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.layout-wide #frontier-main {
+    layout: horizontal;
+}
+
+.layout-wide #frontier-scroll {
+    width: 2fr;
+    height: 1fr;
+}
+
+.layout-wide #frontier-detail {
+    width: 3fr;
+    margin-left: 1;
+}
+
+.layout-wide #execution-main {
+    layout: horizontal;
+}
+
+.layout-wide #metric-chart {
+    width: 2fr;
+}
+
+.layout-wide #execution-side {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.layout-wide #docs-main {
+    layout: horizontal;
+}
+
+.layout-wide #doc-viewer {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.layout-medium #command-main {
+    layout: horizontal;
+}
+
+.layout-medium #command-left {
+    width: 34;
+    min-width: 34;
+}
+
+.layout-medium #command-right {
+    width: 1fr;
+    layout: vertical;
+    margin-left: 1;
+}
+
+.layout-medium #frontier-main {
+    layout: vertical;
+}
+
+.layout-medium #frontier-detail {
+    margin-top: 1;
+}
+
+.layout-medium #execution-main {
+    layout: horizontal;
+}
+
+.layout-medium #metric-chart {
+    width: 5fr;
+}
+
+.layout-medium #execution-side {
+    width: 4fr;
+    margin-left: 1;
+}
+
+.layout-medium #docs-main {
+    layout: horizontal;
+}
+
+.layout-medium #docs-sidebar {
+    width: 32;
+}
+
+.layout-medium #doc-viewer {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.layout-compact #command-main,
+.layout-compact #command-right,
+.layout-compact #execution-main,
+.layout-compact #docs-main {
+    layout: vertical;
+}
+
+.layout-compact #command-left,
+.layout-compact #command-right,
+.layout-compact #execution-side,
+.layout-compact #metric-chart,
+.layout-compact #frontier-detail,
+.layout-compact #docs-sidebar,
+.layout-compact #doc-viewer {
+    width: 1fr;
+    margin-left: 0;
+    margin-top: 0;
+}
+
+.layout-compact #frontier-scroll,
+.layout-compact #metric-chart {
+    min-height: 12;
+}
+
+.layout-compact #frontier-main {
+    layout: vertical;
+}
+
+.layout-compact #frontier-detail {
+    margin-top: 1;
+}
+
+.layout-compact #docs-sidebar {
+    height: auto;
+    margin-bottom: 1;
 }
 
 AddIdeaModal {
@@ -75,8 +303,8 @@ AddIdeaModal {
 AddIdeaModal > #dialog {
     width: 60;
     height: auto;
-    border: tall $accent;
-    background: $surface;
+    border: tall #235174;
+    background: #08111a;
     padding: 1 2;
 }
 
@@ -88,13 +316,13 @@ GPUStatusModal > #gpu-dialog {
     width: 80;
     height: auto;
     max-height: 80%;
-    border: tall $accent;
-    background: $surface;
+    border: tall #235174;
+    background: #08111a;
     padding: 1 2;
 }
 
 LogScreen {
-    background: $surface;
+    background: #060d15;
 }
 
 LogScreen #log-content {
@@ -106,7 +334,7 @@ LogScreen #log-content {
 LogScreen #log-footer {
     dock: bottom;
     height: 1;
-    background: $panel;
+    background: #08111a;
     padding: 0 1;
 }
 
@@ -117,18 +345,18 @@ GoalInputModal {
 GoalInputModal > #goal-dialog {
     width: 70;
     height: auto;
-    border: tall $accent;
-    background: $surface;
+    border: tall #235174;
+    background: #08111a;
     padding: 1 2;
 }
 
 GoalInputModal #goal-hint {
-    color: $text-muted;
+    color: #95a6bd;
     margin: 0 0 1 0;
 }
 
 ReviewScreen {
-    background: $surface;
+    background: #060d15;
 }
 
 #review-container {
@@ -139,18 +367,22 @@ ReviewScreen {
 
 #review-title {
     text-style: bold;
-    color: $accent;
+    color: #8bd5ff;
     margin: 0 0 1 0;
 }
 
-#section-understanding, #section-strategy, #section-evaluation {
+#section-understanding,
+#section-strategy,
+#section-evaluation {
     text-style: bold;
     margin: 1 0 0 0;
 }
 
-#understanding-content, #strategy-content, #evaluation-content {
+#understanding-content,
+#strategy-content,
+#evaluation-content {
     margin: 0 0 1 2;
-    color: $text;
+    color: #d7e1f3;
 }
 
 #review-actions {
@@ -158,19 +390,19 @@ ReviewScreen {
     height: auto;
     padding: 1 2;
     layout: horizontal;
-    background: $panel;
+    background: #08111a;
 }
 
 #review-footer {
     dock: bottom;
     height: 1;
-    background: $panel;
-    color: $text-muted;
+    background: #08111a;
+    color: #95a6bd;
     padding: 0 1;
 }
 
 EditDocScreen {
-    background: $surface;
+    background: #060d15;
 }
 
 #edit-title {
@@ -178,7 +410,7 @@ EditDocScreen {
     height: 1;
     text-style: bold;
     padding: 0 1;
-    background: $panel;
+    background: #08111a;
 }
 
 #edit-area {
@@ -190,5 +422,5 @@ EditDocScreen {
     height: auto;
     layout: horizontal;
     padding: 0 1;
-    background: $panel;
+    background: #08111a;
 }

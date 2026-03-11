@@ -25,6 +25,11 @@ from open_researcher.research_events import (
     MemoryUpdated,
     NoPendingIdeas,
     PhaseTransition,
+    PrepareCompleted,
+    PrepareFailed,
+    PrepareStarted,
+    PrepareStepCompleted,
+    PrepareStepStarted,
     ReproductionRequested,
     ResearchEvent,
     RoleFailed,
@@ -58,6 +63,15 @@ class TUIEventRenderer:
     def _set_phase(self, phase: str) -> None:
         try:
             self._app.call_from_thread(setattr, self._app, "app_phase", phase)
+        except RuntimeError:
+            pass
+
+    def _set_trace(self, text: str) -> None:
+        clean = str(text or "").strip()
+        if not hasattr(self._app, "set_trace_banner"):
+            return
+        try:
+            self._app.call_from_thread(self._app.set_trace_banner, clean)
         except RuntimeError:
             pass
 
@@ -119,114 +133,184 @@ class TUIEventRenderer:
 
         if isinstance(event, ScoutStarted):
             self._set_phase("scouting")
+            self._set_trace("Scout agent | repository reconnaissance")
+            return
+
+        if isinstance(event, PrepareStarted):
+            self._set_phase("preparing")
+            self._set_trace(
+                f"Prepare | {event.repo_profile} | {event.working_dir} | {event.python_executable}"
+            )
+            self._safe_output(
+                f"[prepare] Starting repo prepare ({event.repo_profile}) in {event.working_dir}."
+            )
+            return
+
+        if isinstance(event, PrepareStepStarted):
+            self._set_phase("preparing")
+            self._set_trace(f"Prepare {event.step} | {event.source or 'auto-detected'}")
+            self._safe_output(
+                f"[prepare] {event.step} -> {event.command}"
+            )
+            return
+
+        if isinstance(event, PrepareStepCompleted):
+            self._set_trace(f"Prepare {event.step} complete | {event.status}")
+            suffix = f" ({event.detail})" if event.detail else ""
+            self._safe_output(
+                f"[prepare] {event.step} completed [{event.status}].{suffix}"
+            )
+            return
+
+        if isinstance(event, PrepareCompleted):
+            self._set_trace(f"Prepare complete | {event.status}")
+            self._safe_output(
+                f"[prepare] Repo prepare finished [{event.status}]"
+                + (f" with {event.unresolved} unresolved item(s)." if event.unresolved else ".")
+            )
+            return
+
+        if isinstance(event, PrepareFailed):
+            self._set_trace(f"Prepare failed | {event.step}")
+            self._safe_output(f"[prepare] {event.step} failed: {event.detail}")
             return
 
         if isinstance(event, ManagerCycleStarted):
             self._set_phase("experimenting")
+            self._set_trace(f"Cycle {event.cycle} | Research Manager")
             self._safe_output(f"[system] === Graph cycle {event.cycle}: Starting Research Manager ===")
             return
 
         if isinstance(event, HypothesisProposed):
+            suffix = self._id_suffix(event.hypothesis_ids)
+            self._set_trace(f"Manager | hypothesis refresh{suffix}")
             self._safe_output(
                 f"[manager] Proposed/updated {event.count} hypothesis item(s)."
-                f"{self._id_suffix(event.hypothesis_ids)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ExperimentSpecCreated):
+            suffix = self._id_suffix(event.experiment_spec_ids)
+            self._set_trace(f"Manager | experiment specs{suffix}")
             self._safe_output(
                 f"[manager] Prepared {event.count} experiment spec(s)."
-                f"{self._id_suffix(event.experiment_spec_ids)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, CriticReviewStarted):
+            self._set_trace(f"Critic | {event.stage} review")
             self._safe_output(f"[critic] Starting {event.stage} review.")
             return
 
         if isinstance(event, FrontierSynced):
+            suffix = self._first_item_suffix(event.items)
+            self._set_trace(f"Frontier synced | {event.frontier_items} runnable item(s){suffix}")
             self._safe_output(
                 f"[system] Frontier synced ({event.frontier_items} runnable item(s))."
-                f"{self._first_item_suffix(event.items)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ExperimentPreflightFailed):
+            suffix = self._first_item_suffix(event.items)
+            self._set_trace(f"Critic rejected | {event.rejected_count} spec(s){suffix}")
             self._safe_output(
                 f"[critic] Rejected {event.rejected_count} experiment spec(s)."
-                f"{self._first_item_suffix(event.items)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ExperimentStarted):
             self._set_phase("experimenting")
+            suffix = self._experiment_suffix(event)
+            self._set_trace(f"Experiment running | run #{event.experiment_num}{suffix}")
             self._safe_output(
                 f"[exp] Starting experiment agent (run #{event.experiment_num})..."
-                f"{self._experiment_suffix(event)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ExperimentCompleted):
+            suffix = self._experiment_suffix(event)
+            self._set_trace(f"Experiment finished | run #{event.experiment_num} | code={event.exit_code}{suffix}")
             self._safe_output(
                 f"[exp] Experiment agent finished (run #{event.experiment_num}, code={event.exit_code})."
-                f"{self._experiment_suffix(event)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, RoleFailed):
+            self._set_trace(f"{event.role} failed | code={event.exit_code}")
             self._safe_output(f"[system] {event.role} failed with exit code {event.exit_code}.")
             return
 
         if isinstance(event, NoPendingIdeas):
+            self._set_trace("Research queue drained | no pending frontier items")
             self._safe_output("[system] No projected backlog items remain. Stopping.")
             return
 
         if isinstance(event, EvidenceRecorded):
+            suffix = self._first_item_suffix(event.items)
+            self._set_trace(f"Evidence recorded | {event.evidence_created} item(s){suffix}")
             self._safe_output(
                 f"[critic] Recorded {event.evidence_created} evidence item(s)."
-                f"{self._first_item_suffix(event.items)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ClaimUpdated):
+            suffix = self._first_item_suffix(event.items)
+            self._set_trace(f"Claim updated | {event.count} item(s){suffix}")
             self._safe_output(
                 f"[critic] Updated {event.count} claim(s)."
-                f"{self._first_item_suffix(event.items)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, ReproductionRequested):
+            suffix = self._first_item_suffix(event.items)
+            self._set_trace(f"Reproduction requested | {event.count} item(s){suffix}")
             self._safe_output(
                 f"[critic] Requested reproduction for {event.count} item(s)."
-                f"{self._first_item_suffix(event.items)}"
+                f"{suffix}"
             )
             return
 
         if isinstance(event, MemoryUpdated):
+            self._set_trace(
+                f"Memory updated | ideation={event.ideation_memory} experiment={event.experiment_memory}"
+            )
             self._safe_output(
                 f"[system] Memory updated (ideation={event.ideation_memory}, experiment={event.experiment_memory})."
             )
             return
 
         if isinstance(event, LimitReached):
+            self._set_trace(f"Research limit reached | max_experiments={event.max_experiments}")
             self._safe_output(f"[system] Max experiments ({event.max_experiments}) reached. Stopping.")
             return
 
         if isinstance(event, CrashLimitReached):
+            self._set_trace(f"Crash limit reached | max_crashes={event.max_crashes}")
             self._safe_output(
                 f"[system] Crash limit reached ({event.max_crashes} consecutive crashes). Pausing."
             )
             return
 
         if isinstance(event, PhaseTransition):
+            self._set_trace(f"Phase transition | {event.next_phase}")
             self._safe_output(f"[system] Phase transition to '{event.next_phase}' — pausing for review.")
             return
 
         if isinstance(event, AllIdeasProcessed):
+            self._set_trace("Research session finished | all cycles complete")
             self._safe_output("[system] All cycles finished.")
             return
 
         if isinstance(event, SessionFailed):
+            self._set_trace(f"Session failed | {event.failed_role} | code={event.exit_code}")
             self._safe_output(
                 f"[system] Session failed while running {event.failed_role} (code={event.exit_code})."
             )

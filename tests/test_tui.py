@@ -1,12 +1,30 @@
 """Tests for Textual TUI components."""
 
 from open_researcher.tui.widgets import (
+    BootstrapStatusPanel,
+    DocsSidebarPanel,
     ExperimentStatusPanel,
+    FrontierDetailPanel,
+    FrontierFocusPanel,
     HotkeyBar,
     IdeaListPanel,
+    LineageTimelinePanel,
     RecentExperiments,
+    SessionChromeBar,
     StatsBar,
+    TraceBanner,
     render_ideas_markdown,
+)
+from open_researcher.tui.view_model import (
+    BootstrapSummary,
+    ClaimItem,
+    DocNavItem,
+    EvidenceItem,
+    FrontierCard,
+    FrontierDetail,
+    LineageItem,
+    SessionChrome,
+    TimelineItem,
 )
 
 
@@ -89,6 +107,208 @@ def test_hotkey_bar_includes_quit():
     bar = HotkeyBar()
     rendered = bar.render()
     assert "q" in str(rendered)
+
+
+def test_session_chrome_bar_renders_protocol_and_metric():
+    widget = SessionChromeBar()
+    widget.update_chrome(
+        SessionChrome(
+            branch="main",
+            protocol="research-v1",
+            mode="autonomous",
+            phase="experimenting",
+            phase_label="Research Loop: Experiment Queue Active",
+            paused=False,
+            skip_current=False,
+            primary_metric="score",
+            direction="higher_is_better",
+            baseline_value=0.81,
+            current_value=0.84,
+            best_value=0.85,
+            total=4,
+            keep=2,
+            discard=1,
+            crash=1,
+            frontier_runnable=3,
+        )
+    )
+    assert "research-v1" in widget.chrome_text
+    assert "main" in widget.chrome_text
+    assert "0.8500" in widget.chrome_text
+
+
+def test_bootstrap_status_panel_renders_prepare_summary():
+    panel = BootstrapStatusPanel()
+    panel.update_summary(
+        BootstrapSummary(
+            status="running",
+            working_dir=".",
+            python_executable="/tmp/demo/.venv/bin/python",
+            install_status="completed",
+            data_status="running",
+            smoke_status="pending",
+            log_path=".research/prepare.log",
+            unresolved=["Smoke command inferred from evaluation.md"],
+            missing_paths=["data/ready.txt"],
+        )
+    )
+    assert "Repository Prepare" in panel.summary_text
+    assert "prepare.log" in panel.summary_text
+    assert "data/ready.txt" in panel.summary_text
+
+
+def test_trace_banner_renders_latest_trace():
+    widget = TraceBanner()
+    widget.update_trace("frontier-001 / exec-001 / breadth_exploration")
+    assert "frontier-001" in widget.banner_text
+    assert "exec-001" in widget.banner_text
+
+
+def test_frontier_focus_panel_renders_research_cards():
+    panel = FrontierFocusPanel()
+    panel.update_frontiers(
+        [
+            FrontierCard(
+                frontier_id="frontier-001",
+                execution_id="exec-001",
+                idea_id="idea-001",
+                priority=1,
+                status="approved",
+                claim_state="candidate",
+                repro_required=True,
+                hypothesis_summary="Try seed-stable evaluation",
+                spec_summary="Lock dataloader order and compare variance",
+                description="Re-run evaluation with fixed seed",
+                attribution_focus="Evaluation stability",
+                expected_signal="Variance decreases",
+                risk_level="low",
+                reason_code="approved_for_execution",
+                metric_value="0.84",
+            )
+        ]
+    )
+    assert "frontier-001" in panel.items_text
+    assert "REPRO" in panel.items_text
+    assert "approved_for_execution" in panel.items_text
+
+
+def test_frontier_detail_panel_renders_selected_frontier_payload():
+    panel = FrontierDetailPanel()
+    panel.update_detail(
+        FrontierDetail(
+            frontier=FrontierCard(
+                frontier_id="frontier-001",
+                execution_id="exec-001",
+                idea_id="idea-001",
+                priority=1,
+                status="approved",
+                claim_state="candidate",
+                repro_required=True,
+                hypothesis_summary="Seed locking reduces variance",
+                spec_summary="Run fixed-seed benchmark",
+                description="Re-run with fixed seed",
+                attribution_focus="Evaluation stability",
+                expected_signal="variance down",
+                risk_level="low",
+                reason_code="approved_for_execution",
+            ),
+            hypothesis_id="hyp-001",
+            hypothesis_rationale="Random order may be masking signal.",
+            expected_evidence=["variance down", "same mean score"],
+            experiment_spec_id="spec-001",
+            change_plan="Lock seed and dataloader order.",
+            evaluation_plan="Run benchmark three times and compare variance.",
+            primary_metric="score",
+            direction="higher_is_better",
+            baseline_value=0.78,
+            current_value=0.80,
+            global_best_value=0.84,
+            latest_metric_value=0.82,
+            best_metric_value=0.82,
+            metric_samples=1,
+            evidence=[
+                EvidenceItem(
+                    evidence_id="evi-001",
+                    frontier_id="frontier-001",
+                    execution_id="exec-001",
+                    reliability="strong",
+                    reason_code="result_observed",
+                    description="variance dropped by 40%",
+                    metric_value="0.82",
+                )
+            ],
+            claims=[
+                ClaimItem(
+                    claim_update_id="claim-001",
+                    frontier_id="frontier-001",
+                    execution_id="exec-001",
+                    transition="promote",
+                    confidence="high",
+                    reason_code="supported_by_strong_evidence",
+                )
+            ],
+        )
+    )
+    assert "Seed locking reduces variance" in panel.body_text
+    assert "variance dropped by 40%" in panel.body_text
+    assert "claim-001" in panel.body_text
+    assert "vs baseline" in panel.body_text
+    assert "best observed" in panel.body_text
+
+
+def test_lineage_timeline_panel_renders_branch_and_timeline():
+    panel = LineageTimelinePanel()
+    panel.update_items(
+        [
+            LineageItem(
+                relation="refines",
+                parent_id="hyp-001",
+                child_id="hyp-002",
+                parent_summary="Baseline stabilizes poorly",
+                child_summary="Seed locking reduces variance",
+            )
+        ],
+        [
+            TimelineItem(
+                ts="2026-03-11T10:00:00Z",
+                event="experiment_started",
+                phase="experimenting",
+                frontier_id="frontier-001",
+                execution_id="exec-001",
+                reason_code="breadth_exploration",
+                detail="run #1 started",
+            )
+        ],
+    )
+    assert "hyp-001" in panel.body_text
+    assert "experiment_started" in panel.body_text
+    assert "frontier-001" in panel.body_text
+
+
+def test_docs_sidebar_panel_renders_active_doc_preview():
+    panel = DocsSidebarPanel()
+    panel.update_docs(
+        [
+            DocNavItem(
+                filename="research_graph.md",
+                title="Research Graph",
+                available=True,
+                dynamic=True,
+                preview="Generated from canonical JSON state",
+            ),
+            DocNavItem(
+                filename="evaluation.md",
+                title="Evaluation",
+                available=False,
+                dynamic=False,
+                preview="Missing",
+            ),
+        ],
+        current_file="research_graph.md",
+    )
+    assert "Research Graph" in panel.body_text
+    assert "LIVE" in panel.body_text
+    assert "Missing" in panel.body_text
 
 
 def test_recent_experiments_renders():
