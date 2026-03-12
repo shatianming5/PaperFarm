@@ -1,13 +1,13 @@
 <div align="center">
 
-# 🧑‍🌾 Open-Researcher: Planting GPUs & APIs 🌱, Harvesting Papers & SOTAs 🌾
+# 🧑‍🌾 PaperFarm: Planting GPUs & APIs 🌱, Harvesting Papers & SOTAs 🌾
 
 <p>
-  <a href="https://pypi.org/project/open-researcher/"><img alt="PyPI" src="https://img.shields.io/pypi/v/open-researcher?style=flat-square&logo=pypi&logoColor=white" /></a>
-  <a href="https://pepy.tech/projects/open-researcher"><img alt="Downloads" src="https://img.shields.io/pepy/dt/open-researcher?style=flat-square&logo=python&logoColor=white" /></a>
+  <a href="https://pypi.org/project/PaperFarm/"><img alt="PyPI" src="https://img.shields.io/pypi/v/PaperFarm?style=flat-square&logo=pypi&logoColor=white" /></a>
+  <a href="https://pepy.tech/projects/PaperFarm"><img alt="Downloads" src="https://img.shields.io/pepy/dt/PaperFarm?style=flat-square&logo=python&logoColor=white" /></a>
   <a href="https://www.python.org/downloads/"><img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" /></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green?style=flat-square" /></a>
-  <a href="https://github.com/shatianming5/open-researcher"><img alt="GitHub stars" src="https://img.shields.io/github/stars/shatianming5/open-researcher?style=flat-square&logo=github" /></a>
+  <a href="https://github.com/shatianming5/PaperFarm"><img alt="GitHub stars" src="https://img.shields.io/github/stars/shatianming5/PaperFarm?style=flat-square&logo=github" /></a>
 </p>
 
 <h3>🔬 Point it at any repo — sow ideas, run experiments, and harvest better code autonomously</h3>
@@ -22,7 +22,7 @@
 
 ## 🌾 Key Features
 
-- **🚀 One `run` Command**: `open-researcher run` bootstraps a new workflow when `.research/` is missing, or resumes an existing workflow when it already exists.
+- **🚀 One `run` Command**: `PaperFarm run` bootstraps a new workflow when `.research/` is missing, or resumes an existing workflow when it already exists.
 
 - **🤖 Multi-Agent Support**: Works with Claude Code, Codex CLI, Aider, and OpenCode — auto-detects the first installed agent, or pick your own.
 
@@ -45,15 +45,15 @@
 ### One-Command Workflow (Recommended)
 
 ```bash
-pip install open-researcher
+pip install PaperFarm
 
 cd your-project
-open-researcher run
+PaperFarm run
 ```
 
 This launches a **4-phase flow**:
 
-Plant the first seed with `open-researcher run`, then let the field work:
+Plant the first seed with `PaperFarm run`, then let the field work:
 
 1. **Scout** — survey the field: analyze your codebase, search related work, and design evaluation metrics
 2. **Prepare** — prepare the soil: resolve a local Python env, install command, data/setup step, and a readiness smoke check
@@ -63,8 +63,8 @@ Plant the first seed with `open-researcher run`, then let the field work:
 If you want to inspect exactly what `run` will use before it touches the repo, use:
 
 ```bash
-open-researcher run --dry-run
-open-researcher doctor
+PaperFarm run --dry-run
+PaperFarm doctor
 ```
 
 ### Headless Mode
@@ -72,7 +72,7 @@ open-researcher doctor
 Run without TUI — perfect for scripts, CI, or monitoring with external tools:
 
 ```bash
-open-researcher run --mode headless --goal "reduce val_loss below 0.3" --max-experiments 20
+PaperFarm run --mode headless --goal "reduce val_loss below 0.3" --max-experiments 20
 ```
 
 Outputs structured **JSON Lines** to stdout, one event per line:
@@ -89,17 +89,17 @@ Also writes to `.research/events.jsonl` for persistent logging. Interactive mode
 ### Manual Step-by-Step
 
 ```bash
-pip install open-researcher
+pip install PaperFarm
 
 cd your-project
-open-researcher init                      # Initialize .research/ directory
-open-researcher run --agent claude-code   # Launch with TUI dashboard
+PaperFarm init                      # Initialize .research/ directory
+PaperFarm run --agent claude-code   # Launch with TUI dashboard
 # Go to sleep. Check results in the morning:
-open-researcher status --sparkline
-open-researcher results --chart primary
+PaperFarm status --sparkline
+PaperFarm results --chart primary
 ```
 
-> Try the interactive demo — no agent or API key needed: `open-researcher demo`
+> Try the interactive demo — no agent or API key needed: `PaperFarm demo`
 
 ---
 
@@ -178,7 +178,7 @@ Each experiment is a git commit. Successful experiments stay; failed ones are ro
 <summary><b>🧰 Auto-Prepare Resolution Rules</b></summary>
 <br/>
 
-`open-researcher run` now tries to make a local Python repo runnable before the research loop starts.
+`PaperFarm run` now tries to make a local Python repo runnable before the research loop starts.
 
 - **Python env priority**: explicit `bootstrap.python` → active virtualenv → repo `.venv` → auto-create `.venv`
 - **Install priority**: explicit `bootstrap.install_command` → `uv sync` → `poetry install` → `python -m pip install -r requirements.txt` → `python -m pip install -e .`
@@ -329,14 +329,14 @@ Open Researcher supports **Linux**, **macOS**, and **Windows**. Python 3.10+ req
 ### Option A: pip install (recommended)
 
 ```bash
-pip install open-researcher
+pip install PaperFarm
 
 # Try the demo first (no agent or API key needed)
-open-researcher demo
+PaperFarm demo
 
 # Then use it for real
 cd your-project
-open-researcher run
+PaperFarm run
 ```
 
 ### Option B: From source (for development)
@@ -346,8 +346,8 @@ open-researcher run
 <br/>
 
 ```bash
-git clone https://github.com/shatianming5/open-researcher.git
-cd open-researcher
+git clone https://github.com/shatianming5/PaperFarm.git
+cd PaperFarm
 make dev    # install with dev dependencies
 make test   # run tests
 make lint   # run linter
@@ -359,7 +359,7 @@ make lint   # run linter
 
 ## 🖥️ CLI Reference
 
-> All commands: `open-researcher <command>`
+> All commands: `PaperFarm <command>`
 
 <details>
 <summary>⚡ <b>Core Commands</b></summary>
@@ -569,7 +569,7 @@ See [`examples/`](examples/) for complete setups:
 
 Contributions are welcome! Please follow these steps:
 
-1. Open an [issue](https://github.com/shatianming5/open-researcher/issues) to discuss the proposed change
+1. Open an [issue](https://github.com/shatianming5/PaperFarm/issues) to discuss the proposed change
 2. Fork the repository and create your feature branch
 3. Submit a pull request with a clear description
 
@@ -582,7 +582,7 @@ This project is licensed under the [MIT License](LICENSE).
 ---
 
 <p align="center">
-  <a href="https://star-history.com/#shatianming5/open-researcher&Date">
-    <img src="https://api.star-history.com/svg?repos=shatianming5/open-researcher&type=Date" width="600" alt="Star History" />
+  <a href="https://star-history.com/#shatianming5/PaperFarm&Date">
+    <img src="https://api.star-history.com/svg?repos=shatianming5/PaperFarm&type=Date" width="600" alt="Star History" />
   </a>
 </p>
