@@ -195,6 +195,14 @@ def test_doctor_events_require_monotonic_positive_seq(valid_repo):
     assert check_map["events.jsonl"] == "FAIL"
 
 
+def test_doctor_events_invalid_utf8_fails_instead_of_crashing(valid_repo):
+    (valid_repo / ".research" / "events.jsonl").write_bytes(b"\xff\xfe\xfd")
+
+    checks = run_doctor(valid_repo)
+    check_map = {c["check"]: c["status"] for c in checks}
+    assert check_map["events.jsonl"] == "FAIL"
+
+
 def test_doctor_returns_all_checks(valid_repo):
     """Doctor should return the expanded research-v1 health surface."""
     checks = run_doctor(valid_repo)

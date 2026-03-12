@@ -412,7 +412,7 @@ def run_doctor(repo_path: Path) -> list[dict]:
             results.append(
                 {"check": "events.jsonl", "status": "OK", "detail": f"{total} event(s), last_seq={last_seq}"}
             )
-        except (TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        except (TypeError, ValueError, json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             results.append({"check": "events.jsonl", "status": "FAIL", "detail": f"Parse error: {exc}"})
     else:
         results.append({"check": "events.jsonl", "status": "WARN", "detail": "File not found"})
