@@ -46,6 +46,7 @@ def test_init_creates_research_directory():
         assert not (research / "prepare.log").exists()
         assert (research / "scripts" / "record.py").is_file()
         assert (research / "scripts" / "rollback.sh").is_file()
+        assert (research / "scripts" / "launch_detached.py").is_file()
 
         experiment = (research / "experiment_program.md").read_text()
         assert "research/test1" in experiment
@@ -141,6 +142,8 @@ def test_experiment_program_serial_mode():
     assert "execution_id" in result
     assert "frontier_id" in result
     assert "Never stage runtime state" in result
+    assert "launch_detached.py" in result
+    assert "nohup" in result
 
 
 def test_init_creates_experiment_progress(init_dir):

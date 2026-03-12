@@ -3,6 +3,7 @@
 import csv
 import json
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -956,3 +957,242 @@ def test_worker_manager_times_out_parallel_run_and_marks_item_skipped():
         summary = idea_pool.summary()
         assert summary["skipped"] == 1
         assert any("Experiment timeout" in line for line in output_lines)
+
+
+def test_worker_manager_waits_for_registered_detached_run_result():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        results_path = research / "results.tsv"
+        results_path.write_text(
+            "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n",
+            encoding="utf-8",
+        )
+        idea = {
+            "id": "idea-001",
+            "description": "Detached long run",
+            "status": "pending",
+            "priority": 1,
+            "claimed_by": None,
+            "assigned_experiment": None,
+            "result": None,
+            "source": "graph",
+            "category": "graph",
+            "gpu_hint": "auto",
+            "created_at": "2026-01-01T00:00:00",
+            "protocol": "research-v1",
+            "frontier_id": "frontier-001",
+            "execution_id": "exec-001",
+            "hypothesis_id": "hyp-001",
+            "experiment_spec_id": "spec-001",
+        }
+        idea_pool = _make_idea_pool(research, [idea])
+        output_lines: list[str] = []
+
+        def mock_agent_factory():
+            agent = MagicMock()
+
+            def run_side_effect(workdir, on_output=None, program_file="program.md", env=None, **kwargs):
+                detached = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.4)",
+                    ],
+                    cwd=str(workdir),
+                    start_new_session=True,
+                )
+                state_path = research / "runtime" / "idea-001__exec-001.json"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "idea_id": env["OPEN_RESEARCHER_IDEA_ID"],
+                            "execution_id": env["OPEN_RESEARCHER_EXECUTION_ID"],
+                            "frontier_id": env["OPEN_RESEARCHER_FRONTIER_ID"],
+                            "active": True,
+                            "status": "running",
+                            "pid": detached.pid,
+                            "pgid": detached.pid,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                def _record_after_wait() -> None:
+                    detached.wait(timeout=5)
+                    secondary = json.dumps(
+                        {
+                            "_open_researcher_trace": {
+                                "frontier_id": env["OPEN_RESEARCHER_FRONTIER_ID"],
+                                "idea_id": env["OPEN_RESEARCHER_IDEA_ID"],
+                                "execution_id": env["OPEN_RESEARCHER_EXECUTION_ID"],
+                                "hypothesis_id": env["OPEN_RESEARCHER_HYPOTHESIS_ID"],
+                                "experiment_spec_id": env["OPEN_RESEARCHER_EXPERIMENT_SPEC_ID"],
+                            }
+                        }
+                    )
+                    with results_path.open("a", newline="", encoding="utf-8") as handle:
+                        writer = csv.writer(handle, delimiter="\t")
+                        writer.writerow(
+                            [
+                                "2026-03-12T12:00:00Z",
+                                "abc1234",
+                                "mAP",
+                                "0.654321",
+                                secondary,
+                                "keep",
+                                "detached-idea",
+                            ]
+                        )
+                    state_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "idea_id": env["OPEN_RESEARCHER_IDEA_ID"],
+                                "execution_id": env["OPEN_RESEARCHER_EXECUTION_ID"],
+                                "frontier_id": env["OPEN_RESEARCHER_FRONTIER_ID"],
+                                "active": False,
+                                "status": "completed",
+                                "pid": detached.pid,
+                                "pgid": detached.pid,
+                                "exit_code": 0,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                threading.Thread(target=_record_after_wait, daemon=True).start()
+                return 0
+
+            agent.run.side_effect = run_side_effect
+            agent.terminate = MagicMock()
+            return agent
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=mock_agent_factory,
+            max_workers=1,
+            on_output=output_lines.append,
+        )
+
+        wm.start()
+        wm.join(timeout=10)
+
+        summary = idea_pool.summary()
+        assert summary["done"] == 1
+        state = next(item for item in idea_pool.all_ideas() if item["id"] == "idea-001")
+        assert state["result"] == {"metric_value": 0.654321, "verdict": "kept"}
+        assert any("Monitoring detached run" in line for line in output_lines)
+
+
+def test_worker_manager_requeues_failed_registered_detached_run_without_result():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        results_path = research / "results.tsv"
+        results_path.write_text(
+            "timestamp\tcommit\tprimary_metric\tmetric_value\tsecondary_metrics\tstatus\tdescription\n",
+            encoding="utf-8",
+        )
+        idea = {
+            "id": "idea-001",
+            "description": "Detached run without result",
+            "status": "pending",
+            "priority": 1,
+            "claimed_by": None,
+            "assigned_experiment": None,
+            "result": None,
+            "source": "graph",
+            "category": "graph",
+            "gpu_hint": "auto",
+            "created_at": "2026-01-01T00:00:00",
+            "protocol": "research-v1",
+            "frontier_id": "frontier-001",
+            "execution_id": "exec-001",
+            "hypothesis_id": "hyp-001",
+            "experiment_spec_id": "spec-001",
+        }
+        idea_pool = _make_idea_pool(research, [idea])
+        output_lines: list[str] = []
+
+        def mock_agent_factory():
+            agent = MagicMock()
+
+            def run_side_effect(workdir, on_output=None, program_file="program.md", env=None, **kwargs):
+                detached = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.2)",
+                    ],
+                    cwd=str(workdir),
+                    start_new_session=True,
+                )
+                state_path = research / "runtime" / "idea-001__exec-001.json"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "idea_id": env["OPEN_RESEARCHER_IDEA_ID"],
+                            "execution_id": env["OPEN_RESEARCHER_EXECUTION_ID"],
+                            "frontier_id": env["OPEN_RESEARCHER_FRONTIER_ID"],
+                            "active": True,
+                            "status": "running",
+                            "pid": detached.pid,
+                            "pgid": detached.pid,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                def _close_after_wait() -> None:
+                    detached.wait(timeout=5)
+                    state_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "idea_id": env["OPEN_RESEARCHER_IDEA_ID"],
+                                "execution_id": env["OPEN_RESEARCHER_EXECUTION_ID"],
+                                "frontier_id": env["OPEN_RESEARCHER_FRONTIER_ID"],
+                                "active": False,
+                                "status": "failed",
+                                "pid": detached.pid,
+                                "pgid": detached.pid,
+                                "exit_code": 7,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+
+                threading.Thread(target=_close_after_wait, daemon=True).start()
+                return 0
+
+            agent.run.side_effect = run_side_effect
+            agent.terminate = MagicMock()
+            return agent
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=mock_agent_factory,
+            max_workers=1,
+            max_claims=1,
+            on_output=output_lines.append,
+        )
+
+        wm.start()
+        wm.join(timeout=10)
+
+        summary = idea_pool.summary()
+        assert summary["pending"] == 1
+        state = next(item for item in idea_pool.all_ideas() if item["id"] == "idea-001")
+        assert state["status"] == "pending"
+        assert any("Detached run failure released" in line for line in output_lines)

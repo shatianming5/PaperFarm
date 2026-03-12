@@ -133,6 +133,11 @@ Treat those as execution hints from the manager/runtime. Use repo-supported knob
 - If the selected row or linked spec contains a specific `evaluation_plan`, follow it as long as it is consistent with the repo and current evaluation file
 - Extract the primary metric value
 - Do not delete or overwrite `.research/eval_output.log` before recording. `record.py` will automatically persist scalar correctness and timing fields from that log.
+- If the selected run is expected to take long enough that Codex should hand control back to the runtime before the command finishes, you must use the supported launcher:
+  `python .research/scripts/launch_detached.py -- <end-to-end command>`
+- Detached commands must be end-to-end: they are responsible for running train/eval and then calling `.research/scripts/record.py` before they exit.
+- Do **not** use ad-hoc backgrounding such as `nohup`, trailing `&`, `disown`, `tmux`, or `screen`. The runtime only recognizes detached runs that were registered through `launch_detached.py`.
+- Do **not** exit successfully after merely starting a long run unless that run has been registered through `launch_detached.py`. A zero exit without a recorded result or a registered detached run is treated as a failure.
 
 ### 2f. Record & Decide
 

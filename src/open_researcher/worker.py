@@ -2,8 +2,11 @@
 
 import json
 import logging
+import os
+import signal
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -18,6 +21,7 @@ from open_researcher.git_safety import (
 from open_researcher.gpu_manager import GPUManager
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.results_cmd import load_results
+from open_researcher.storage import atomic_write_json
 from open_researcher.watchdog import TimeoutWatchdog
 from open_researcher.worker_plugins import (
     WorkerRuntimePlugins,
@@ -26,6 +30,17 @@ from open_researcher.worker_plugins import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class DetachedRunOutcome:
+    """Outcome of monitoring a detached long-running experiment."""
+
+    matched_row: dict | None = None
+    result_status: str = ""
+    run_code: int = 1
+    should_requeue: bool = False
+    stop_after_finalize: bool = False
 
 
 class WorkerManager:
@@ -211,6 +226,221 @@ class WorkerManager:
         ):
             return self.idea_pool.update_status(idea_id, "pending")
         return False
+
+    @staticmethod
+    def _safe_state_component(value: str, fallback: str) -> str:
+        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
+        return cleaned or fallback
+
+    def _detached_state_path(self, idea: dict) -> Path:
+        idea_id = self._safe_state_component(str(idea.get("id", "")).strip(), "idea")
+        execution_id = self._safe_state_component(str(idea.get("execution_id", "")).strip(), "exec")
+        return self.research_dir / "runtime" / f"{idea_id}__{execution_id}.json"
+
+    def _load_detached_state(self, idea: dict) -> dict | None:
+        path = self._detached_state_path(idea)
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        expected_idea_id = str(idea.get("id", "")).strip()
+        expected_execution_id = str(idea.get("execution_id", "")).strip()
+        if expected_idea_id and str(data.get("idea_id", "")).strip() not in {"", expected_idea_id}:
+            return None
+        if expected_execution_id and str(data.get("execution_id", "")).strip() not in {"", expected_execution_id}:
+            return None
+        payload = dict(data)
+        payload["_state_path"] = str(path)
+        return payload
+
+    def _write_detached_state(self, idea: dict, payload: dict) -> None:
+        path = self._detached_state_path(idea)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, payload)
+
+    @staticmethod
+    def _detached_process_alive(state: dict | None) -> bool:
+        if not isinstance(state, dict):
+            return False
+        try:
+            pid = int(state.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+
+    def _terminate_detached_process(self, state: dict, *, wid: str, reason: str, sig: int = signal.SIGTERM) -> None:
+        pid = 0
+        pgid = 0
+        try:
+            pid = int(state.get("pid", 0) or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        try:
+            pgid = int(state.get("pgid", 0) or 0)
+        except (TypeError, ValueError):
+            pgid = 0
+
+        sent = False
+        if pgid > 0:
+            try:
+                os.killpg(pgid, sig)
+                sent = True
+            except ProcessLookupError:
+                sent = False
+            except OSError:
+                sent = False
+        if not sent and pid > 0:
+            try:
+                os.kill(pid, sig)
+                sent = True
+            except ProcessLookupError:
+                sent = False
+            except OSError:
+                sent = False
+        if sent:
+            self.on_output(f"[{wid}] Sent signal {int(sig)} to detached run for {reason}")
+            wait_started = time.monotonic()
+            while time.monotonic() - wait_started < 5.0:
+                if not self._detached_process_alive(state):
+                    return
+                time.sleep(0.1)
+            if sig != signal.SIGKILL:
+                self._terminate_detached_process(state, wid=wid, reason=reason, sig=signal.SIGKILL)
+
+    def _monitor_detached_run(
+        self,
+        *,
+        wid: str,
+        idea: dict,
+        workdir: Path,
+        results_before_count: int,
+        claim_token: str,
+        run_started_at: float | None,
+    ) -> DetachedRunOutcome:
+        state_wait_started = time.monotonic()
+        state = self._load_detached_state(idea)
+        while state is None and not self._should_stop():
+            if time.monotonic() - state_wait_started >= 2.0:
+                break
+            time.sleep(0.1)
+            state = self._load_detached_state(idea)
+        if state is None:
+            return DetachedRunOutcome(
+                matched_row=None,
+                result_status="",
+                run_code=1,
+                should_requeue=True,
+                stop_after_finalize=True,
+            )
+
+        self.on_output(
+            f"[{wid}] Monitoring detached run for {idea['id']} via {Path(state['_state_path']).name}"
+        )
+        self._activity.update_worker(
+            "experiment_agent",
+            wid,
+            status="monitoring",
+            idea=str(idea.get("description", ""))[:50],
+            detached_state=str(state.get("_state_path", "")).strip(),
+        )
+        deadline = (
+            float(run_started_at) + self._timeout_seconds
+            if run_started_at is not None and self._timeout_seconds > 0
+            else None
+        )
+        while True:
+            state = self._load_detached_state(idea) or state
+            alive = self._detached_process_alive(state)
+            active = alive or (bool(state.get("active", False)) and not state.get("pid"))
+            matched_row = self._find_matching_result_row(
+                workdir,
+                results_before_count=results_before_count,
+                idea=idea,
+            )
+            result_status = self._result_status_from_row(matched_row)
+
+            if matched_row is not None and not alive:
+                return DetachedRunOutcome(
+                    matched_row=matched_row,
+                    result_status=result_status,
+                    run_code=0,
+                )
+
+            if deadline is not None and time.monotonic() >= deadline:
+                self.on_output(f"[{wid}] Detached run for {idea['id']} exceeded timeout; terminating")
+                self._terminate_detached_process(state, wid=wid, reason=str(idea.get("id", "")).strip())
+                state = dict(state)
+                state.update(
+                    {
+                        "active": False,
+                        "status": "timed_out",
+                        "exit_code": 124,
+                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    }
+                )
+                self._write_detached_state(idea, state)
+                return DetachedRunOutcome(
+                    matched_row=None,
+                    result_status="",
+                    run_code=124,
+                    should_requeue=True,
+                    stop_after_finalize=True,
+                )
+
+            if self._should_stop():
+                self.on_output(f"[{wid}] Stop requested while monitoring detached run for {idea['id']}")
+                self._terminate_detached_process(
+                    state,
+                    wid=wid,
+                    reason=str(idea.get("id", "")).strip(),
+                )
+                return DetachedRunOutcome(
+                    matched_row=None,
+                    result_status="",
+                    run_code=1,
+                    should_requeue=True,
+                    stop_after_finalize=True,
+                )
+
+            if not active:
+                detached_exit = self._safe_float(state.get("exit_code"))
+                exit_code = int(detached_exit) if detached_exit is not None else 1
+                self.on_output(
+                    f"[{wid}] Detached run for {idea['id']} exited without recording a result"
+                )
+                reapplied = self._return_idea_to_pending(
+                    str(idea.get("id", "")).strip(),
+                    claim_token=claim_token,
+                )
+                if reapplied:
+                    self.on_output(f"[{wid}] Detached run failure released {idea['id']} back to pending")
+                else:
+                    self.on_output(
+                        f"[{wid}] Claim race detected for {idea['id']}; pending release suppressed after detached run"
+                    )
+                return DetachedRunOutcome(
+                    matched_row=None,
+                    result_status="",
+                    run_code=exit_code if exit_code != 0 else 1,
+                    should_requeue=False,
+                    stop_after_finalize=True,
+                )
+
+            time.sleep(0.5)
 
     def join(self, timeout: float | None = None) -> None:
         """Wait for all worker threads to finish."""
@@ -508,26 +738,63 @@ class WorkerManager:
                             elif self._terminal_result_present(current_state):
                                 pass
                             else:
-                                should_requeue = True
-                                reapplied = self._return_idea_to_pending(
-                                    idea["id"],
+                                detached_outcome = self._monitor_detached_run(
+                                    wid=wid,
+                                    idea=idea,
+                                    workdir=workdir,
+                                    results_before_count=results_before_count,
                                     claim_token=claim_token,
+                                    run_started_at=run_started_at,
                                 )
-                                if reapplied:
-                                    self.on_output(
-                                        f"[{wid}] No recorded result for {idea['id']} despite zero exit; "
-                                        "released claim back to pending"
-                                    )
+                                matched_row = detached_outcome.matched_row
+                                result_status = detached_outcome.result_status
+                                if matched_row is not None:
+                                    metric_value, verdict = self._result_payload_from_row(matched_row)
+                                    current_state = self._current_idea_state(str(idea.get("id", "")))
+                                    if not self._terminal_result_present(current_state):
+                                        applied = self.idea_pool.mark_done(
+                                            idea["id"],
+                                            metric_value=metric_value,
+                                            verdict=verdict,
+                                            claim_token=claim_token or None,
+                                            resource_observation=self._resource_observation(
+                                                idea,
+                                                allocation,
+                                                duration_seconds=(
+                                                    time.monotonic() - run_started_at
+                                                    if run_started_at is not None
+                                                    else None
+                                                ),
+                                            ),
+                                        )
+                                        if not applied:
+                                            self.on_output(
+                                                f"[{wid}] Claim race detected for {idea['id']}; "
+                                                "winner already finalized after detached monitor"
+                                            )
+                                    run_code = detached_outcome.run_code
                                 else:
-                                    self.on_output(
-                                        f"[{wid}] Claim race detected for {idea['id']}; "
-                                        "pending release suppressed, cleanup applied"
-                                    )
-                                if timed_out:
-                                    run_code = 124
-                                else:
-                                    run_code = 1
-                                stop_after_finalize = True
+                                    should_requeue = detached_outcome.should_requeue
+                                    if should_requeue:
+                                        reapplied = self._return_idea_to_pending(
+                                            idea["id"],
+                                            claim_token=claim_token,
+                                        )
+                                        if reapplied:
+                                            self.on_output(
+                                                f"[{wid}] No recorded result for {idea['id']} despite zero exit; "
+                                                "released claim back to pending"
+                                            )
+                                        else:
+                                            self.on_output(
+                                                f"[{wid}] Claim race detected for {idea['id']}; "
+                                                "pending release suppressed, cleanup applied"
+                                            )
+                                    if timed_out:
+                                        run_code = 124
+                                    else:
+                                        run_code = detached_outcome.run_code
+                                    stop_after_finalize = detached_outcome.stop_after_finalize
                         else:
                             applied = self.idea_pool.mark_done(
                                 idea["id"],

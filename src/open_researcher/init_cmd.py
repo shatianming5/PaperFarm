@@ -120,7 +120,7 @@ def do_init(repo_path: Path, tag: str | None = None) -> None:
     scripts_dir.mkdir()
 
     scripts_src = Path(__file__).parent / "scripts"
-    for script_name in ["record.py", "rollback.sh"]:
+    for script_name in ["record.py", "rollback.sh", "launch_detached.py"]:
         src = scripts_src / script_name
         dst = scripts_dir / script_name
         shutil.copy2(src, dst)
