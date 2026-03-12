@@ -151,6 +151,38 @@ def test_run_bootstrap_prepare_reuses_ready_workspace_before_install_and_data(tm
     assert "data ==" not in prepare_log
 
 
+def test_run_bootstrap_prepare_retries_smoke_before_falling_back_to_install(tmp_path: Path) -> None:
+    research = tmp_path / ".research"
+    research.mkdir()
+    smoke_command = (
+        "from pathlib import Path; "
+        "marker = Path('.smoke_retry_once'); "
+        "already_failed = marker.exists(); "
+        "marker.write_text('1'); "
+        "raise SystemExit(0 if already_failed else 1)"
+    )
+    cfg = ResearchConfig(
+        bootstrap_auto_prepare=True,
+        bootstrap_install_command=_py_inline("raise SystemExit(9)"),
+        bootstrap_data_command=_py_inline("raise SystemExit(8)"),
+        bootstrap_smoke_command=_py_inline(smoke_command),
+    )
+
+    code, state = run_bootstrap_prepare(tmp_path, research, cfg)
+
+    assert code == 0
+    assert state["status"] == "completed"
+    assert state["install"]["status"] == "skipped"
+    assert state["data"]["status"] == "skipped"
+    assert state["smoke"]["status"] == "completed"
+    assert any("retry" in item.lower() for item in state["warnings"])
+    prepare_log = (research / "prepare.log").read_text(encoding="utf-8")
+    assert "smoke_preflight ==" in prepare_log
+    assert "smoke_preflight_retry_2 ==" in prepare_log
+    assert "install ==" not in prepare_log
+    assert "data ==" not in prepare_log
+
+
 def test_format_bootstrap_dry_run_surfaces_expected_paths_and_unresolved(tmp_path: Path) -> None:
     research = tmp_path / ".research"
     research.mkdir()

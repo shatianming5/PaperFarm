@@ -16,6 +16,7 @@ from open_researcher.event_journal import now_iso
 
 BOOTSTRAP_STATE_VERSION = "research-v1"
 PREPARE_LOG_NAME = "prepare.log"
+SMOKE_PREFLIGHT_ATTEMPTS = 2
 
 
 def _default_step(*, log_path: str) -> dict:
@@ -429,18 +430,31 @@ def _try_smoke_preflight(
     if not command:
         return False, state
 
-    result = _run_prepare_command(
-        "smoke_preflight",
-        command,
-        working_dir=working_dir,
-        env=env,
-        log_path=log_path,
-    )
-    if result.returncode != 0:
+    attempt_count = 0
+    result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, SMOKE_PREFLIGHT_ATTEMPTS + 1):
+        attempt_count = attempt
+        step_name = "smoke_preflight" if attempt == 1 else f"smoke_preflight_retry_{attempt}"
+        result = _run_prepare_command(
+            step_name,
+            command,
+            working_dir=working_dir,
+            env=env,
+            log_path=log_path,
+        )
+        if result.returncode == 0:
+            break
+    if result is None or result.returncode != 0:
         return False, state
 
     timestamp = now_iso()
     ready_detail = "Smoke passed before install/data; reusing the current workspace as-is."
+    if attempt_count > 1:
+        ready_detail += f" The readiness probe passed on retry {attempt_count}/{SMOKE_PREFLIGHT_ATTEMPTS}."
+        _append_warning(
+            state,
+            "Smoke preflight passed on retry after an earlier failure; see prepare.log for the initial failure.",
+        )
     expected_paths = _expected_paths_status(repo_path, state.get("expected_paths", []))
     state["expected_path_status"] = expected_paths
     missing = [item["path"] for item in expected_paths if not item.get("exists")]
