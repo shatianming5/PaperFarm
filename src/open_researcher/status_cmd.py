@@ -11,6 +11,7 @@ from rich.panel import Panel
 
 from open_researcher.config import RESEARCH_PROTOCOL, ResearchConfig, load_config
 from open_researcher.research_graph import ResearchGraphStore
+from open_researcher.token_tracking import load_ledger, estimate_cost, TokenMetrics
 
 
 def _safe_float(value: str) -> float | None:
@@ -292,6 +293,25 @@ def _sparkline(values: list[float]) -> str:
     return "".join(SPARK_CHARS[min(int((v - lo) / (hi - lo) * 7), 7)] for v in values)
 
 
+def _format_token_usage(research: Path) -> list[str]:
+    """Format token usage lines for status output."""
+    ledger = load_ledger(research / "token_ledger.json")
+    if ledger.cumulative.tokens_total == 0:
+        return []
+    lines = ["  Token Usage:"]
+    lines.append(
+        f"    Total: {ledger.cumulative.tokens_total:,} "
+        f"(input: {ledger.cumulative.tokens_input:,}  "
+        f"output: {ledger.cumulative.tokens_output:,})"
+    )
+    cost = estimate_cost(ledger.cumulative)
+    lines.append(f"    Est. cost: ${cost:.2f}")
+    if ledger.per_phase:
+        phase_parts = [f"{k}={v.tokens_total:,}" for k, v in ledger.per_phase.items()]
+        lines.append(f"    By phase: {'  '.join(phase_parts)}")
+    return lines
+
+
 def print_status(repo_path: Path, sparkline: bool = False) -> None:
     """Print formatted research status to terminal."""
     research = repo_path / ".research"
@@ -399,6 +419,11 @@ def print_status(repo_path: Path, sparkline: bool = False) -> None:
             lines.append(f"    {icon} {val_str}  {r.get('description', '')}")
     else:
         lines.append("  No experiments yet")
+
+    token_lines = _format_token_usage(research)
+    if token_lines:
+        lines.append("")
+        lines.extend(token_lines)
 
     panel = Panel(
         "\n".join(lines),
