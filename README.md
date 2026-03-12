@@ -24,7 +24,7 @@
 
 - **🚀 One `run` Command**: `PaperFarm run` bootstraps a new workflow when `.research/` is missing, or resumes an existing workflow when it already exists.
 
-- **🤖 Multi-Agent Support**: Works with Claude Code, Codex CLI, Aider, and OpenCode — auto-detects the first installed agent, or pick your own.
+- **🤖 Multi-Agent Support**: Works with Claude Code, Codex CLI, Aider, OpenCode, and Gemini CLI — auto-detects the first installed agent, or pick your own.
 
 - **🔬 Scout → Prepare → Review → Experiment Flow**: AI agent analyzes your codebase, resolves install/data/smoke bootstrap steps, then runs the `research-v1` loop — keeping what works, discarding what doesn't.
 
@@ -220,6 +220,7 @@ If a command cannot be resolved safely, `run` stops before the review/runtime st
 | [Codex CLI](https://github.com/openai/codex) | `--agent codex` | Supported |
 | [Aider](https://github.com/paul-gauthier/aider) | `--agent aider` | Supported |
 | [OpenCode](https://github.com/opencode-ai/opencode) | `--agent opencode` | Supported |
+| [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `--agent gemini-cli` | Supported |
 
 Auto-detection: If you don't specify `--agent`, Open Researcher finds the first installed one.
 
@@ -245,6 +246,10 @@ agents:
     model: "openai/gpt-5"
     agent: "builder"
     extra_flags: ["--share"]
+  gemini-cli:
+    model: "gemini-3.1-pro"          # override default model
+    sandbox: ""                       # optional sandbox mode
+    extra_flags: []
 ```
 
 </details>
@@ -517,6 +522,7 @@ agents:                       # per-agent overrides (optional)
 | `codex.py` | Codex CLI adapter |
 | `aider.py` | Aider adapter |
 | `opencode.py` | OpenCode adapter |
+| `gemini.py` | Gemini CLI adapter |
 
 </details>
 
