@@ -16,12 +16,7 @@ from open_researcher.bootstrap import (
     format_bootstrap_dry_run,
     run_bootstrap_prepare,
 )
-from open_researcher.config import load_config, require_supported_protocol
-from open_researcher.graph_protocol import (
-    initialize_graph_runtime_state,
-    resolve_role_agent_name,
-)
-from open_researcher.parallel_runtime import run_parallel_experiment_batch
+from open_researcher.graph_protocol import initialize_graph_runtime_state
 from open_researcher.research_loop import (
     ResearchLoop,
 )
@@ -35,12 +30,17 @@ from open_researcher.research_loop import (
     set_paused as _set_paused,
 )
 from open_researcher.role_programs import resolve_role_program_file
+from open_researcher.runtime_entrypoints import (
+    build_parallel_runner,
+    load_runtime_config,
+    resolve_research_agents,
+    resolve_scout_agent,
+)
 from open_researcher.tui_runner import (
     print_exit_summary,
     run_tui_session,
     start_daemon,
 )
-from open_researcher.workflow_options import apply_worker_override
 
 console = Console()
 
@@ -72,64 +72,6 @@ def render_scout_program(research_dir: Path, tag: str, goal: str | None) -> None
     template = env.get_template("scout_program.md.j2")
     content = template.render(tag=tag, goal=goal or "")
     (research_dir / "scout_program.md").write_text(content)
-
-
-def _resolve_scout_agent(cfg, *, primary_agent_name: str | None):
-    return _resolve_agent(
-        resolve_role_agent_name(cfg, "scout_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-
-
-def _resolve_research_agents(
-    cfg,
-    *,
-    primary_agent_name: str | None,
-):
-    """Resolve manager/critic/experiment roles for research-v1."""
-    manager_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "manager_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    critic_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "critic_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    exp_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "experiment_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    return manager_agent, critic_agent, exp_agent
-
-
-def _build_parallel_runner(
-    *,
-    repo_path: Path,
-    research_dir: Path,
-    cfg,
-    exp_agent,
-    renderer,
-):
-    if cfg.max_workers == 1:
-        return None
-    return lambda **kwargs: run_parallel_experiment_batch(
-        repo_path,
-        research_dir,
-        cfg,
-        exp_agent,
-        renderer.make_output_callback("experimenting"),
-        **kwargs,
-    )
-
-
-def _load_runtime_config(research: Path, *, workers: int | None, max_experiments: int = 0, token_budget: int = 0):
-    cfg = apply_worker_override(load_config(research, strict=True), workers)
-    require_supported_protocol(cfg)
-    if max_experiments > 0:
-        cfg.max_experiments = max_experiments
-    if token_budget > 0:
-        cfg.token_budget = token_budget
-    return cfg
 
 
 def _run_prepare_then_graph(
@@ -208,12 +150,13 @@ def do_run(
         console.print("[red]Error:[/red] .research/ not found. Run 'open-researcher init' first.")
         raise SystemExit(1)
 
-    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
+    cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+    manager_agent, critic_agent, exp_agent = resolve_research_agents(
         cfg,
         primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
     )
 
     if dry_run:
@@ -246,12 +189,12 @@ def do_run(
             pause_fn=_set_paused,
         )
         loop_ref["loop"] = loop
-        parallel_runner = _build_parallel_runner(
+        parallel_runner = build_parallel_runner(
             repo_path=repo_path,
             research_dir=research,
             cfg=cfg,
             exp_agent=exp_agent,
-            renderer=renderer,
+            on_output=renderer.make_output_callback("experimenting"),
         )
         start_daemon(
             lambda: _run_prepare_then_graph(
@@ -310,14 +253,19 @@ def do_start(
     if tag is None:
         tag = date.today().strftime("%b%d").lower()
     research = do_start_init(repo_path, tag=tag)
-    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
+    cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
 
-    scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+    scout_agent = resolve_scout_agent(
         cfg,
         primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
+    )
+    manager_agent, critic_agent, exp_agent = resolve_research_agents(
+        cfg,
+        primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
     )
 
     stop = threading.Event()
@@ -349,7 +297,7 @@ def do_start(
                     except RuntimeError:
                         pass
                     return
-                refreshed_cfg = _load_runtime_config(
+                refreshed_cfg = load_runtime_config(
                     research, workers=workers, max_experiments=max_experiments, token_budget=token_budget
                 )
                 initialize_graph_runtime_state(research, refreshed_cfg)
@@ -383,12 +331,12 @@ def do_start(
             start_daemon(_run_scout)
 
         def _start_runtime() -> None:
-            parallel_runner = _build_parallel_runner(
+            parallel_runner = build_parallel_runner(
                 repo_path=repo_path,
                 research_dir=research,
                 cfg=cfg_ref["cfg"],
                 exp_agent=exp_agent,
-                renderer=renderer,
+                on_output=renderer.make_output_callback("experimenting"),
             )
             start_daemon(
                 lambda: exit_codes.update(

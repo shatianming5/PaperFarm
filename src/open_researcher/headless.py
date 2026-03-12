@@ -6,13 +6,8 @@ from pathlib import Path
 
 from open_researcher.agent_runtime import resolve_agent
 from open_researcher.bootstrap import ensure_bootstrap_state, run_bootstrap_prepare
-from open_researcher.config import load_config, require_supported_protocol
 from open_researcher.event_journal import EventJournal
-from open_researcher.graph_protocol import (
-    initialize_graph_runtime_state,
-    resolve_role_agent_name,
-)
-from open_researcher.parallel_runtime import run_parallel_experiment_batch
+from open_researcher.graph_protocol import initialize_graph_runtime_state
 from open_researcher.research_events import (
     ReviewAutoConfirmed,
     RoleFailed,
@@ -32,7 +27,12 @@ from open_researcher.research_loop import (
 from open_researcher.research_loop import (
     set_paused as _set_paused,
 )
-from open_researcher.workflow_options import apply_worker_override
+from open_researcher.runtime_entrypoints import (
+    build_parallel_runner,
+    load_runtime_config,
+    resolve_research_agents,
+    resolve_scout_agent,
+)
 
 _resolve_agent = resolve_agent
 
@@ -62,33 +62,6 @@ class HeadlessLogger:
         self._journal.close()
 
 
-def _resolve_scout_agent(cfg, *, primary_agent_name: str | None):
-    return _resolve_agent(
-        resolve_role_agent_name(cfg, "scout_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-
-
-def _resolve_research_agents(
-    cfg,
-    *,
-    primary_agent_name: str | None,
-):
-    manager_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "manager_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    critic_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "critic_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    exp_agent = _resolve_agent(
-        resolve_role_agent_name(cfg, "experiment_agent", primary_agent_name),
-        cfg.agent_config,
-    )
-    return manager_agent, critic_agent, exp_agent
-
-
 def _read_goal_text(research: Path) -> str:
     goal_path = research / "goal.md"
     if not goal_path.exists():
@@ -97,26 +70,6 @@ def _read_goal_text(research: Path) -> str:
         return goal_path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
-
-
-def _build_parallel_runner(
-    *,
-    repo_path: Path,
-    research_dir: Path,
-    cfg,
-    exp_agent,
-    logger: HeadlessLogger,
-):
-    if cfg.max_workers == 1:
-        return None
-    return lambda **kwargs: run_parallel_experiment_batch(
-        repo_path,
-        research_dir,
-        cfg,
-        exp_agent,
-        logger.make_output_callback("experimenting"),
-        **kwargs,
-    )
 
 
 def _finalize_headless_session(
@@ -160,20 +113,16 @@ def do_run_headless(
     if not research.is_dir():
         raise SystemExit(1)
 
-    cfg = apply_worker_override(load_config(research, strict=True), workers)
-    require_supported_protocol(cfg)
+    cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
-    if max_experiments > 0:
-        cfg.max_experiments = max_experiments
-    if token_budget > 0:
-        cfg.token_budget = token_budget
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+    manager_agent, critic_agent, exp_agent = resolve_research_agents(
         cfg,
         primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
     )
 
     try:
@@ -193,12 +142,12 @@ def do_run_headless(
             read_latest_status_fn=_read_latest_status,
             pause_fn=_set_paused,
         )
-        parallel_runner = _build_parallel_runner(
+        parallel_runner = build_parallel_runner(
             repo_path=repo_path,
             research_dir=research,
             cfg=cfg,
             exp_agent=exp_agent,
-            logger=logger,
+            on_output=logger.make_output_callback("experimenting"),
         )
         prepare_code, _state = run_bootstrap_prepare(
             repo_path,
@@ -244,15 +193,10 @@ def do_start_headless(
         tag = date.today().strftime("%b%d").lower()
 
     research = do_start_init(repo_path, tag=tag)
-    cfg = apply_worker_override(load_config(research, strict=True), workers)
-    require_supported_protocol(cfg)
+    cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
 
-    if max_experiments > 0:
-        cfg.max_experiments = max_experiments
-    if token_budget > 0:
-        cfg.token_budget = token_budget
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
@@ -264,10 +208,15 @@ def do_start_headless(
         )
     )
 
-    scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+    scout_agent = resolve_scout_agent(
         cfg,
         primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
+    )
+    manager_agent, critic_agent, exp_agent = resolve_research_agents(
+        cfg,
+        primary_agent_name=agent_name,
+        resolve_agent_fn=_resolve_agent,
     )
 
     try:
@@ -289,10 +238,12 @@ def do_start_headless(
             _finalize_headless_session(logger, loop, scout_code=code)
             return code
 
-        cfg = apply_worker_override(load_config(research, strict=True), workers)
-        require_supported_protocol(cfg)
-        if max_experiments > 0:
-            cfg.max_experiments = max_experiments
+        cfg = load_runtime_config(
+            research,
+            workers=workers,
+            max_experiments=max_experiments,
+            token_budget=token_budget,
+        )
         initialize_graph_runtime_state(research, cfg)
         prepare_code, _state = run_bootstrap_prepare(
             repo_path,
@@ -307,12 +258,12 @@ def do_start_headless(
 
         logger.on_event(ReviewAutoConfirmed())
 
-        parallel_runner = _build_parallel_runner(
+        parallel_runner = build_parallel_runner(
             repo_path=repo_path,
             research_dir=research,
             cfg=cfg,
             exp_agent=exp_agent,
-            logger=logger,
+            on_output=logger.make_output_callback("experimenting"),
         )
 
         loop.run_graph_protocol(
