@@ -1014,7 +1014,7 @@ class ResearchLoop:
                 if int(parallel_result.get("failed_runs", 0) or 0) > 0 or exit_codes["exp"] != 0:
                     self.had_experiment_failure = True
                     self.last_experiment_failure_code = exit_codes["exp"] or 1
-                stop_reason = stop_reason_ref["value"]
+                stop_reason = stop_reason_ref["value"] or parallel_result.get("stop_reason")
                 if self._apply_budget_check() == "stop":
                     self.last_stop_reason = "token_budget"
                     break

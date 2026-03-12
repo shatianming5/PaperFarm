@@ -289,7 +289,7 @@ class GPUManager:
         with self._lock:
             data = self._read()
             gpus = [self._normalize_gpu_row(gpu) for gpu in data.get("gpus", []) if isinstance(gpu, dict)]
-            candidates: list[tuple[int, tuple[str, int], dict]] = []
+            candidates_by_host: dict[str, list[tuple[int, int, tuple[str, int], dict]]] = {}
             for gpu in gpus:
                 if not self._packable(gpu, memory_mb=request_memory, shareable=shareable, exclusive=exclusive):
                     continue
@@ -303,11 +303,28 @@ class GPUManager:
                     and int(preferred.get("device", -1)) == int(gpu["device"])
                     else 1
                 )
-                candidates.append((preferred_match, leftover, (str(gpu["host"]), int(gpu["device"])), gpu))
-            candidates.sort(key=lambda item: (item[0], item[1], item[2][0], item[2][1]))
-            selected = candidates[:group_count]
-            if len(selected) < group_count:
+                host = str(gpu["host"])
+                candidates_by_host.setdefault(host, []).append(
+                    (preferred_match, leftover, (str(gpu["host"]), int(gpu["device"])), gpu)
+                )
+            host_plans: list[tuple[int, int, str, list[tuple[int, int, tuple[str, int], dict]]]] = []
+            for host, host_candidates in candidates_by_host.items():
+                host_candidates.sort(key=lambda item: (item[0], item[1], item[2][1]))
+                if len(host_candidates) < group_count:
+                    continue
+                selected = host_candidates[:group_count]
+                host_plans.append(
+                    (
+                        min(item[0] for item in selected),
+                        sum(item[1] for item in selected),
+                        host,
+                        selected,
+                    )
+                )
+            if not host_plans:
                 return None
+            host_plans.sort(key=lambda item: (item[0], item[1], item[2]))
+            selected = host_plans[0][3]
 
             reservations: list[dict] = []
             selected_keys = {(host, device) for _, _, (host, device), _ in selected}
