@@ -166,7 +166,7 @@ def test_headless_empty_frontier_completes_session(tmp_path):
     mock_agent.terminate = MagicMock()
 
     def mock_run(workdir, on_output=None, program_file="program.md", env=None):
-        if program_file == "scout_program.md":
+        if program_file in {"scout_program.md", ".internal/role_programs/scout.md"}:
             _set_bootstrap_auto_prepare(workdir, False)
         return 0
 

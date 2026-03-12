@@ -64,3 +64,21 @@ def test_render_scout_program_without_goal(tmp_path):
     render_scout_program(research, tag="test", goal=None)
     content = (research / "scout_program.md").read_text()
     assert "Research Goal" not in content
+
+
+def test_render_scout_program_prefers_internal_role_file_when_present(tmp_path):
+    """Scout render should update internal role file and keep legacy file in sync."""
+    from open_researcher.role_programs import internal_role_program_file
+    from open_researcher.run_cmd import render_scout_program
+
+    _make_git_repo(tmp_path)
+    research = tmp_path / ".research"
+    research.mkdir()
+    internal_path = research / internal_role_program_file("scout")
+    internal_path.parent.mkdir(parents=True, exist_ok=True)
+    internal_path.write_text("# stale\n")
+
+    render_scout_program(research, tag="test", goal="improve f1")
+
+    assert "improve f1" in internal_path.read_text()
+    assert "improve f1" in (research / "scout_program.md").read_text()

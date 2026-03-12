@@ -34,7 +34,7 @@ from open_researcher.research_loop import (
 from open_researcher.research_loop import (
     set_paused as _set_paused,
 )
-from open_researcher.role_programs import resolve_role_program_file
+from open_researcher.role_programs import legacy_role_program_file, resolve_role_program_file
 from open_researcher.tui_runner import (
     print_exit_summary,
     run_tui_session,
@@ -67,11 +67,16 @@ def _overall_exit_code(exit_codes: dict[str, int], *, crash_limited: bool = Fals
 
 
 def render_scout_program(research_dir: Path, tag: str, goal: str | None) -> None:
-    """Render scout_program.md with optional goal."""
+    """Render scout role program with optional goal."""
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
     template = env.get_template("scout_program.md.j2")
     content = template.render(tag=tag, goal=goal or "")
-    (research_dir / "scout_program.md").write_text(content)
+    scout_rel = resolve_role_program_file(research_dir, "scout")
+    (research_dir / scout_rel).parent.mkdir(parents=True, exist_ok=True)
+    (research_dir / scout_rel).write_text(content)
+    legacy_rel = legacy_role_program_file("scout")
+    if scout_rel != legacy_rel:
+        (research_dir / legacy_rel).write_text(content)
 
 
 def _resolve_scout_agent(cfg, *, primary_agent_name: str | None):

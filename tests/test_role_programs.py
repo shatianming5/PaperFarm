@@ -19,9 +19,11 @@ def test_ensure_internal_role_programs_renders_templates_with_context(tmp_path: 
 
     ensure_internal_role_programs(research, context={"tag": "demo"})
 
+    scout_path = research / internal_role_program_file("scout")
     manager_path = research / internal_role_program_file("manager")
     critic_path = research / internal_role_program_file("critic")
     exp_path = research / internal_role_program_file("experiment")
+    assert scout_path.exists()
     assert manager_path.exists()
     assert critic_path.exists()
     assert exp_path.exists()
@@ -57,6 +59,22 @@ def test_resolve_role_program_file_prefers_internal_then_legacy(tmp_path: Path):
     assert resolve_role_program_file(research, "manager") == internal_role_program_file("manager")
 
 
+def test_resolve_role_program_file_supports_scout_role(tmp_path: Path):
+    research = tmp_path / ".research"
+    research.mkdir()
+
+    assert resolve_role_program_file(research, "scout") == internal_role_program_file("scout")
+
+    legacy = research / legacy_role_program_file("scout")
+    legacy.write_text("# legacy-scout\n", encoding="utf-8")
+    assert resolve_role_program_file(research, "scout") == legacy_role_program_file("scout")
+
+    internal = research / internal_role_program_file("scout")
+    internal.parent.mkdir(parents=True, exist_ok=True)
+    internal.write_text("# internal-scout\n", encoding="utf-8")
+    assert resolve_role_program_file(research, "scout") == internal_role_program_file("scout")
+
+
 def test_missing_role_programs_reports_unavailable_roles(tmp_path: Path):
     research = tmp_path / ".research"
     research.mkdir()
@@ -65,4 +83,4 @@ def test_missing_role_programs_reports_unavailable_roles(tmp_path: Path):
     (research / legacy_role_program_file("manager")).write_text("# manager\n", encoding="utf-8")
 
     missing = missing_role_programs(research)
-    assert missing == ["critic", "experiment"]
+    assert missing == ["scout", "critic", "experiment"]

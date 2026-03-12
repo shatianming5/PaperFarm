@@ -7,9 +7,14 @@ from typing import Literal
 
 from jinja2 import Environment, PackageLoader
 
-RoleProgram = Literal["manager", "critic", "experiment"]
+RoleProgram = Literal["scout", "manager", "critic", "experiment"]
 
 _ROLE_PROGRAM_SPECS: dict[RoleProgram, dict[str, str]] = {
+    "scout": {
+        "template": "scout_program.md.j2",
+        "legacy": "scout_program.md",
+        "internal": ".internal/role_programs/scout.md",
+    },
     "manager": {
         "template": "manager_program.md.j2",
         "legacy": "manager_program.md",

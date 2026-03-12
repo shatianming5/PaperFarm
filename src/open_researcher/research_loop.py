@@ -784,7 +784,7 @@ class ResearchLoop:
         code = self._run_agent(
             agent,
             phase="scouting",
-            program_file="scout_program.md",
+            program_file=resolve_role_program_file(self.research_dir, "scout"),
             error_tag="scout",
         )
         self._accumulate_token_metrics(agent, phase="scouting")
