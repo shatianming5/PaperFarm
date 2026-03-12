@@ -139,7 +139,8 @@ def _check_gpu_info() -> list[dict]:
 def _role_program_check(research: Path) -> dict:
     """Summarize role-program readiness with minimal internal-path leakage."""
     missing = list(missing_role_programs(research))
-    if not (research / "scout_program.md").exists():
+    scout_present = (research / "scout_program.md").exists() or (research / ".internal/role_programs/scout.md").exists()
+    if not scout_present:
         missing.append("scout")
     if missing:
         # Keep original order while removing duplicates.

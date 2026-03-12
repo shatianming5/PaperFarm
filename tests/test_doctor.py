@@ -108,6 +108,17 @@ def test_doctor_missing_scout_program_fails_role_programs(valid_repo):
     assert "scout" in check_map["role programs"]["detail"]
 
 
+def test_doctor_accepts_internal_scout_program_when_legacy_missing(valid_repo):
+    (valid_repo / ".research" / "scout_program.md").unlink()
+    internal_scout = valid_repo / ".research" / ".internal" / "role_programs" / "scout.md"
+    internal_scout.write_text("# scout\n")
+
+    checks = run_doctor(valid_repo)
+    check_map = {c["check"]: c for c in checks}
+
+    assert check_map["role programs"]["status"] == "OK"
+
+
 def test_doctor_no_git(valid_repo):
     """Git check fails when .git is missing."""
     import shutil
