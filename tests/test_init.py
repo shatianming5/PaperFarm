@@ -132,7 +132,7 @@ def test_experiment_program_serial_mode():
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
     tmpl = env.get_template("experiment_program.md.j2")
     result = tmpl.render(tag="demo")
-    assert "Serial Experiment Runner" in result
+    assert "Research-v1 Job Runner" in result
     assert "one at a time" in result
     assert "experiment_progress.json" in result
     assert "research/demo" in result

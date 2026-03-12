@@ -21,6 +21,7 @@ from open_researcher.git_safety import (
 )
 from open_researcher.git_identity import ensure_local_git_identity
 from open_researcher.phase_gate import PhaseGate
+from open_researcher.parallel_runtime import estimate_parallel_frontier_target
 from open_researcher.research_events import (
     AgentOutput,
     AllIdeasProcessed,
@@ -49,7 +50,7 @@ from open_researcher.research_events import (
 from open_researcher.research_graph import ResearchGraphStore
 from open_researcher.research_memory import ResearchMemoryStore
 from open_researcher.results_cmd import load_results, write_final_results_tsv
-from open_researcher.storage import locked_read_json
+from open_researcher.storage import atomic_write_json, locked_read_json
 from open_researcher.watchdog import TimeoutWatchdog
 
 
@@ -534,7 +535,6 @@ class ResearchLoop:
 
     def _ensure_parallel_experiment_ready(
         self,
-        exp_agent,
         *,
         stop_event: threading.Event,
         phase_gate: PhaseGate,
@@ -548,55 +548,31 @@ class ResearchLoop:
             AgentOutput(
                 phase="experimenting",
                 detail=(
-                    "Bootstrapping shared experiment setup/baseline before parallel "
-                    f"worker fan-out (current phase: {phase})."
+                    "Parallel runtime promoted experiment_progress.json to "
+                    "'experimenting'; shared bootstrap stays repo-level and "
+                    "anchor/reference evidence runs as frontier work."
                 ),
             )
         )
         try:
-            workspace_snapshot = capture_clean_workspace_snapshot(self.repo_path)
-        except GitWorkspaceError as exc:
-            self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
-            return 1, "experiment_failed"
-        watchdog = TimeoutWatchdog(self.cfg.timeout, on_timeout=lambda: exp_agent.terminate())
-        watchdog.reset()
-        try:
-            code = self._run_agent(
-                exp_agent,
-                phase="experimenting",
-                program_file="experiment_program.md",
-                error_tag="exp",
-            )
-        finally:
-            watchdog.stop()
-        phase_after = self._read_experiment_phase()
-        try:
-            if code != 0 or phase_after != "experimenting":
-                rollback_workspace(self.repo_path, workspace_snapshot)
-            else:
-                ensure_clean_workspace(self.repo_path, context="after successful experiment")
-        except GitWorkspaceError as exc:
-            self.emit(AgentOutput(phase="experimenting", detail=f"Fatal runtime safety error: {exc}"))
-            return 1, "experiment_failed"
-        if code != 0:
-            return code, "experiment_failed"
-        phase_after = self._read_experiment_phase()
-        if phase_after != "experimenting":
-            self.emit(
-                AgentOutput(
-                    phase="experimenting",
-                    detail=(
-                        "Parallel bootstrap exited without error but did not advance "
-                        f"experiment_progress.json to 'experimenting' (still {phase_after!r})."
-                    ),
-                )
-            )
+            atomic_write_json(self.research_dir / "experiment_progress.json", {"phase": "experimenting"})
+        except OSError as exc:
+            self.emit(AgentOutput(phase="experimenting", detail=f"Failed to set parallel phase: {exc}"))
             return 1, "experiment_failed"
         phase_transition = phase_gate.check()
         if phase_transition:
             self.emit(PhaseTransition(next_phase=phase_transition))
             return 0, "phase_transition"
         return 0, None
+
+    def _frontier_projection_target(self, *, parallel_batch_runner=None) -> int:
+        target = max(int(self.cfg.manager_batch_size or 1), 1)
+        if parallel_batch_runner is None:
+            return target
+        try:
+            return max(target, estimate_parallel_frontier_target(self.research_dir, self.cfg))
+        except Exception:
+            return target
 
     def _make_parallel_callbacks(
         self,
@@ -845,7 +821,6 @@ class ResearchLoop:
 
             if parallel_batch_runner is not None:
                 bootstrap_code, bootstrap_stop_reason = self._ensure_parallel_experiment_ready(
-                    exp_agent,
                     stop_event=stop_event,
                     phase_gate=phase_gate,
                 )
@@ -866,7 +841,7 @@ class ResearchLoop:
 
             frontier_sync = graph_store.sync_idea_pool(
                 self.research_dir / "idea_pool.json",
-                max_items=self.cfg.manager_batch_size,
+                max_items=self._frontier_projection_target(parallel_batch_runner=parallel_batch_runner),
             )
             self.emit(
                 FrontierSynced(
@@ -985,7 +960,7 @@ class ResearchLoop:
                     )
                 frontier_sync = graph_store.sync_idea_pool(
                     self.research_dir / "idea_pool.json",
-                    max_items=self.cfg.manager_batch_size,
+                    max_items=self._frontier_projection_target(parallel_batch_runner=parallel_batch_runner),
                 )
                 self.emit(
                     FrontierSynced(

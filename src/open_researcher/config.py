@@ -37,6 +37,10 @@ class ResearchConfig:
     enable_ideation_memory: bool = True
     enable_experiment_memory: bool = True
     enable_repo_type_prior: bool = True
+    scheduler_objective: str = "gain_per_resource_hour"
+    scheduler_allow_backfill: bool = True
+    scheduler_backfill_threshold_minutes: int = 30
+    scheduler_preemption: str = "none"
     environment_text: str = ""
     bootstrap_auto_prepare: bool = True
     bootstrap_working_dir: str = "."
@@ -46,6 +50,10 @@ class ResearchConfig:
     bootstrap_smoke_command: str = ""
     bootstrap_expected_paths: list[str] = field(default_factory=list)
     bootstrap_requires_gpu: bool = False
+    gpu_default_memory_per_worker_mb: int = 4096
+    gpu_allow_same_gpu_packing: bool = True
+    gpu_packing_signal: str = "memory_only"
+    resource_profiles: dict = field(default_factory=dict)
     role_agents: dict = field(default_factory=dict)
     agent_config: dict = field(default_factory=dict)
 
@@ -79,6 +87,8 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
     roles = raw.get("roles", {})
     memory = raw.get("memory", {})
     bootstrap = raw.get("bootstrap", {})
+    scheduler = raw.get("scheduler", {})
+    resources = raw.get("resources", {})
     raw_protocol = str(research.get("protocol", RESEARCH_PROTOCOL) or RESEARCH_PROTOCOL).strip()
     protocol = PROTOCOL_ALIASES.get(raw_protocol, raw_protocol)
     return ResearchConfig(
@@ -102,6 +112,10 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         enable_ideation_memory=bool(memory.get("ideation", True)),
         enable_experiment_memory=bool(memory.get("experiment", True)),
         enable_repo_type_prior=bool(memory.get("repo_type_prior", True)),
+        scheduler_objective=str(scheduler.get("objective", "gain_per_resource_hour") or "gain_per_resource_hour"),
+        scheduler_allow_backfill=bool(scheduler.get("allow_backfill", True)),
+        scheduler_backfill_threshold_minutes=max(int(scheduler.get("backfill_threshold_minutes", 30) or 30), 1),
+        scheduler_preemption=str(scheduler.get("preemption", "none") or "none"),
         environment_text=str(raw.get("environment", "") or ""),
         bootstrap_auto_prepare=bool(bootstrap.get("auto_prepare", True)),
         bootstrap_working_dir=str(bootstrap.get("working_dir", ".") or "."),
@@ -113,6 +127,10 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         if isinstance(bootstrap.get("expected_paths", []), list)
         else [],
         bootstrap_requires_gpu=bool(bootstrap.get("requires_gpu", False)),
+        gpu_default_memory_per_worker_mb=max(int(gpu.get("default_memory_per_worker_mb", 4096) or 4096), 0),
+        gpu_allow_same_gpu_packing=bool(gpu.get("allow_same_gpu_packing", True)),
+        gpu_packing_signal=str(gpu.get("packing_signal", "memory_only") or "memory_only"),
+        resource_profiles=resources.get("profiles", {}) if isinstance(resources.get("profiles", {}), dict) else {},
         role_agents=roles if isinstance(roles, dict) else {},
         agent_config=raw.get("agents", {}),
     )

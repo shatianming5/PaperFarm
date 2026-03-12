@@ -15,6 +15,7 @@ def _default_memory() -> dict:
         "repo_type_priors": [],
         "ideation_memory": [],
         "experiment_memory": [],
+        "resource_observations": [],
         "seen_claim_updates": [],
         "seen_evidence": [],
     }
@@ -32,7 +33,14 @@ class ResearchMemoryStore:
         normalized = dict(_default_memory())
         normalized.update(data)
         normalized["version"] = "research-v1"
-        for key in ["repo_type_priors", "ideation_memory", "experiment_memory", "seen_claim_updates", "seen_evidence"]:
+        for key in [
+            "repo_type_priors",
+            "ideation_memory",
+            "experiment_memory",
+            "resource_observations",
+            "seen_claim_updates",
+            "seen_evidence",
+        ]:
             value = normalized.get(key)
             normalized[key] = value if isinstance(value, list) else []
         return normalized
@@ -139,8 +147,21 @@ class ResearchMemoryStore:
                             "status": str(source_row.get("status", "")).strip(),
                             "primary_metric": str(source_row.get("primary_metric", "")).strip(),
                             "metric_value": source_row.get("metric_value"),
+                            "resource_observation": source_row.get("resource_observation", {}),
                         }
                     )
+                    observation = source_row.get("resource_observation", {})
+                    if isinstance(observation, dict) and observation:
+                        normalized["resource_observations"].append(
+                            {
+                                "source_evidence": evidence_id,
+                                "frontier_id": str(source_row.get("frontier_id", "")).strip(),
+                                "execution_id": str(source_row.get("execution_id", "")).strip(),
+                                "profile_key": profile_key,
+                                "family_key": str(frontier_row.get("family_key", "")).strip(),
+                                "resource_observation": observation,
+                            }
+                        )
                 normalized["seen_evidence"].append(evidence_id)
 
             data.clear()
@@ -149,6 +170,7 @@ class ResearchMemoryStore:
                 "repo_type_priors": len(normalized["repo_type_priors"]),
                 "ideation_memory": len(normalized["ideation_memory"]),
                 "experiment_memory": len(normalized["experiment_memory"]),
+                "resource_observations": len(normalized["resource_observations"]),
             }
 
         _data, result = locked_update_json(self.path, self._lock, _do, default=_default_memory)

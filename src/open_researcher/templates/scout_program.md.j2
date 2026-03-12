@@ -32,6 +32,11 @@ Valid statuses: `analyzing`, `searching`, `strategizing`, `idle`
 
 1. Read the codebase: source files, tests, documentation, README
 2. Identify: purpose, architecture, entry points, existing benchmarks/evaluations
+3. Identify runtime/resource capabilities that already exist in this repo:
+   - whether GPU is required, optional, or not used
+   - whether the repo exposes multiple launch shapes (single GPU, multi-GPU, torchrun, DDP, etc.)
+   - whether batch size, precision, compile/backend flags, worker counts, or similar knobs already exist
+   - whether there are short runnable checks/benchmarks that can act as backfill jobs
 3. Write your analysis to `.research/project-understanding.md`
 4. Update status: `{"status": "analyzing", "detail": "reading codebase"}`
 
@@ -82,6 +87,9 @@ Update status: `{"status": "strategizing", "detail": "defining research strategy
    - `bootstrap.requires_gpu` if the repo is GPU-only
 5. Write to `.research/evaluation.md`
 6. Update `.research/config.yaml`: set `metrics.primary.*` and `bootstrap.*`
+7. If the repo clearly exposes stable runtime shapes, record them in `.research/research_graph.json -> repo_profile.resource_capabilities`
+   - keep this factual and repo-grounded
+   - do not invent launch modes that the repo does not already expose
 7. Update status: `{"status": "idle", "detail": "analysis complete"}`
 
 ## Rules

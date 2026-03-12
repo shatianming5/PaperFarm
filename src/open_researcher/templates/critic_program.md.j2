@@ -162,6 +162,8 @@ Promotion rules:
 - Do **not** promote on one noisy or ambiguous result.
 - If the result is a single-run improvement without strong attribution, use `needs_repro`.
 - If evidence contradicts the hypothesis, prefer `downgrade` or `reject`.
+- If the repo has an unresolved `anchor_role: "anchor"` frontier, treat non-anchor wins as provisional: keep them at `needs_repro` / `supported_but_needs_repro` until anchor evidence is confirmed.
+- Use any `resource_observation` attached to evidence to judge whether the measurement looks resource-confounded or reproducible.
 
 ## Rules
 

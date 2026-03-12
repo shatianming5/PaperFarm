@@ -1,4 +1,4 @@
-# Experiment Agent — Serial Experiment Runner
+# Experiment Agent — Research-v1 Job Runner
 
 You are the **Experiment Agent**. You run experiments one at a time from the shared backlog.
 
@@ -6,12 +6,14 @@ You are the **Experiment Agent**. You run experiments one at a time from the sha
 
 ## Resume Logic (READ THIS FIRST)
 
-1. Read `.research/experiment_progress.json` — it tracks your current phase
+1. Read `.research/experiment_progress.json` — it tracks whether shared bootstrap is complete
 2. Skip to the phase indicated by `"phase"`:
-   - `"init"` → start from Phase 1
-   - `"baseline"` → Phase 2 setup is done, run baseline training
-   - `"experimenting"` → Phase 2 is complete, go to Phase 3
-3. After completing each phase, **update the progress file** before doing anything else
+   - `"init"` → start from Phase 1 shared bootstrap
+   - `"experimenting"` → shared bootstrap is complete; go directly to Phase 2
+3. After completing bootstrap, **update the progress file** before doing anything else
+4. In `research-v1` worker mode, the selected frontier row is authoritative:
+   - if the runtime already handed you a claimed backlog row with `OPEN_RESEARCHER_FRONTIER_ID` / `OPEN_RESEARCHER_IDEA_ID`, do **not** re-run global bootstrap or baseline setup just because `experiment_progress.json` is still `"init"`
+   - shared bootstrap is a repo-level concern; anchor/reference evidence is represented as normal frontier rows such as `anchor_role: "anchor"`
 
 ## Your Files
 
@@ -56,7 +58,9 @@ Only use the instructions in this file and the `.research/` files it references.
 Do **not** switch to unrelated installed skills, alternate workflow systems, queue runners, tmux wrappers, or `docs/experiment.md`-driven smoke/full loops unless the selected frontier row explicitly requires them.
 In particular, ignore generic experiment skills such as `rd-experiment-runner` when they conflict with this research-v1 contract.
 
-## Phase 1: Setup (only if progress.phase == "init")
+## Phase 1: Shared Bootstrap (only if progress.phase == "init")
+
+Skip this phase when you were launched for a concrete `research-v1` frontier execution. In that case, go directly to Phase 2 and execute the selected row.
 
 1. Check for GPUs: `nvidia-smi --query-gpu=index,memory.total,memory.free --format=csv 2>/dev/null`
 2. If no GPUs: only note CPU-only mode when the selected repo and evaluation contract can genuinely run on CPU.
@@ -66,35 +70,25 @@ In particular, ignore generic experiment skills such as `rd-experiment-runner` w
    - **IMPORTANT**: Do NOT redirect evaluation output to `.research/run.log` — use a separate file like `.research/eval_output.log`
 4. Fill `.research/config.yaml` metrics section if still empty
 5. Create branch: `git checkout -b research/{{ tag }}` (ignore error if branch exists)
-6. **Update progress**: write `{"phase": "baseline"}` to `.research/experiment_progress.json`
-7. **Continue immediately to Phase 2** — do not exit
+6. **Update progress**: write `{"phase": "experimenting"}` to `.research/experiment_progress.json`
+7. If `OPEN_RESEARCHER_BOOTSTRAP_ONLY=1` is set in your environment, stop here after writing the progress file.
+8. **Continue immediately to Phase 2** — do not exit
 
-## Phase 2: Establish Baseline (only if progress.phase == "baseline")
+## Phase 2: Experiment Loop (when progress.phase == "experimenting")
 
-1. Read `.research/evaluation.md` for the evaluation command
-2. Run the evaluation command to establish baseline performance
-3. Extract the primary metric value
-4. Keep `.research/eval_output.log` intact until after recording. `record.py` auto-harvests scalar `key=value` fields from that log as secondary metrics.
-5. Record: `python .research/scripts/record.py --metric <name> --value <val> --status keep --desc "baseline"`
-6. Git commit: `git add -A && git commit -m "baseline: <metric>=<value>"`
-7. **Update progress**: write `{"phase": "experimenting"}` to `.research/experiment_progress.json`
-8. **Continue immediately to Phase 3** — do not exit
-
-## Phase 3: Experiment Loop (when progress.phase == "experimenting")
-
-### 3a. Check Control
+### 2a. Check Control
 - Read `.research/events.jsonl` for the latest `control_command` events
 - Use `.research/control.json` as the quick snapshot if needed
 - If `paused: true`: update status to `paused`, sleep 10s, recheck
 - If `skip_current: true`: skip to next idea, reset flag
 
-### 3b. Pick Next Idea
+### 2b. Pick Next Idea
 - Read `.research/idea_pool.json`
 - Find highest-priority idea with `status: "pending"`
 - If none: update status to `idle`, **exit** (you'll be restarted when new ideas arrive)
 - Claim it: set `status: "running"` in the idea pool
 
-### 3c. Resolve The Execution Contract
+### 2c. Resolve The Execution Contract
 
 For the claimed row:
 
@@ -113,22 +107,34 @@ In research-v1 mode:
 - if `repro_required: true`, treat the run as a reproduction of the same spec, not a new variant
 - preserve `frontier_id`, `execution_id`, `hypothesis_id`, and `experiment_spec_id` on the backlog row
 - do not invent or mutate `reason_code` fields; those belong to manager/critic review
+- if `anchor_role == "anchor"`, treat this run as anchor/reference evidence for the repo
+- if this is **not** an anchor run, still execute it normally; critic decides whether the result remains provisional while anchor evidence is pending
 
-### 3d. Implement
+Resource contract fields may also appear on the row:
+
+- `resource_request`
+- `execution_shape`
+- `expected_duration_minutes`
+- `resource_profile`
+- `workload_label`
+
+Treat those as execution hints from the manager/runtime. Use repo-supported knobs only; do not invent unsupported launchers or scaling schemes.
+
+### 2d. Implement
 
 - Make the smallest code change that satisfies the selected experiment contract
 - Keep attribution clean: prefer one causal change axis
 - Never stage runtime state or generated experiment artifacts such as `.research`, `work_dirs`, checkpoints, eval logs, or visualization/output directories.
 - Git commit: stage only deliberate source/config changes, then commit with `git commit -m "exp: <short description>"`. For pure reproductions with no code/config diff, prefer `git commit --allow-empty`.
 
-### 3e. Evaluate
+### 2e. Evaluate
 
 - Run the evaluation command from `.research/evaluation.md`
 - If the selected row or linked spec contains a specific `evaluation_plan`, follow it as long as it is consistent with the repo and current evaluation file
 - Extract the primary metric value
 - Do not delete or overwrite `.research/eval_output.log` before recording. `record.py` will automatically persist scalar correctness and timing fields from that log.
 
-### 3f. Record & Decide
+### 2f. Record & Decide
 
 - If better than best in results.tsv:
   - `python .research/scripts/record.py --metric <m> --value <v> --status keep --desc "<idea>"`
@@ -141,8 +147,8 @@ In research-v1 mode:
   - `result: {"metric_value": <v>, "verdict": "kept"|"discarded"}`
 - Preserve graph ids and metadata already present on the row
 
-### 3g. Loop
-- Go back to 3a for the next idea
+### 2g. Loop
+- Go back to 2a for the next idea
 
 ## Rules
 

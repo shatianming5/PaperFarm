@@ -11,7 +11,7 @@ experiment:
   timeout: 600                  # seconds per experiment before kill
   max_consecutive_crashes: 3    # pause after N consecutive crashes
   max_experiments: 0            # 0 = unlimited; set to N to stop after N experiments
-  max_parallel_workers: 0       # 0 = auto (one per available GPU), 1 = serial
+  max_parallel_workers: 0       # 0 = auto; runtime packs jobs by available resources
   worker_agent: ""              # agent for sub-workers (default: same as master)
 
 # Metrics (filled by agent in Phase 2)
@@ -46,6 +46,18 @@ research:
   manager_batch_size: 3     # frontier batch size for research-v1 manager
   critic_repro_policy: best_or_surprising  # none | best_or_surprising | always
 
+scheduler:
+  objective: gain_per_resource_hour   # generic scheduler objective across GPU/CPU jobs
+  allow_backfill: true                # allow short shareable jobs to fill idle capacity
+  backfill_threshold_minutes: 30      # jobs at or below this runtime may backfill
+  preemption: none                    # non-preemptive scheduling; running jobs are never killed
+
+scheduler:
+  objective: gain_per_resource_hour   # rank jobs by expected value / resource-time
+  allow_backfill: true                # opportunistically run short shareable jobs
+  backfill_threshold_minutes: 30      # jobs at or below this can backfill
+  preemption: none                    # runtime never kills active jobs for higher-priority work
+
 memory:
   ideation: true           # research-v1: keep long-horizon ideation memory
   experiment: true         # research-v1: keep experiment/evidence memory
@@ -65,6 +77,29 @@ gpu:
   #   - host: "192.168.1.101"
   #     user: "researcher"
   remote_hosts: []
+  default_memory_per_worker_mb: 4096  # default per-job GPU memory budget for packing
+  allow_same_gpu_packing: true        # permit multiple jobs on one GPU if memory budget allows
+  packing_signal: memory_only         # packing decision signal used by the scheduler
+
+resources:
+  profiles: {}                        # optional repo-declared launch/resource shapes for the scheduler
+  default_memory_per_worker_mb: 4096  # default single-job GPU memory budget
+  allow_same_gpu_packing: true        # permit multiple jobs per physical GPU
+  packing_signal: memory_only         # use free/reserved memory, not utilization
+
+# Optional repo-declared execution/resource profiles.
+# These let the manager choose among shapes the repo already exposes.
+# resources:
+#   profiles:
+#     single_gpu_amp:
+#       gpu_count: 1
+#       gpu_mem_mb: 12000
+#       env:
+#         TORCH_COMPILE: "0"
+#     ddp_2gpu:
+#       gpu_count: 2
+#       gpu_mem_mb: 16000
+#       launcher: torchrun
 
 # Agent configuration (optional — override defaults per agent)
 # agents:

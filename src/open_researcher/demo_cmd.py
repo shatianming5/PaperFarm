@@ -191,7 +191,18 @@ def _populate_research(research_dir: Path) -> None:
                         "name": "NVIDIA RTX 4090",
                         "memory_total": 24564,
                         "memory_used": 18200,
+                        "memory_free": 6364,
                         "allocated_to": "worker-0",
+                        "reservations": [
+                            {
+                                "reservation_id": "demo-001",
+                                "tag": "worker-0",
+                                "gpu_count": 1,
+                                "memory_mb": 4096,
+                                "started_at": "2026-03-08T10:00:00Z",
+                                "kind": "experiment",
+                            }
+                        ],
                     },
                     {
                         "host": "localhost",
@@ -199,7 +210,9 @@ def _populate_research(research_dir: Path) -> None:
                         "name": "NVIDIA RTX 4090",
                         "memory_total": 24564,
                         "memory_used": 2100,
+                        "memory_free": 22464,
                         "allocated_to": None,
+                        "reservations": [],
                     },
                 ],
             }

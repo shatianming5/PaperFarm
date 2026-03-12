@@ -529,7 +529,7 @@ def test_run_graph_protocol_waits_for_resume_before_manager_cycle(tmp_path):
     assert manager_started.is_set() is True
 
 
-def test_run_graph_protocol_bootstraps_parallel_baseline_before_worker_batch(tmp_path):
+def test_run_graph_protocol_promotes_parallel_runtime_to_experimenting_without_serial_bootstrap(tmp_path):
     repo_path, research = _setup_repo(tmp_path)
     (research / "manager_program.md").write_text("# manager")
     (research / "critic_program.md").write_text("# critic")
@@ -582,13 +582,6 @@ def test_run_graph_protocol_bootstraps_parallel_baseline_before_worker_batch(tmp
             graph_store.path.write_text(json.dumps(graph, indent=2))
         return 0
 
-    def exp_run(workdir, on_output=None, program_file="program.md", **kwargs):
-        progress = research / "experiment_progress.json"
-        payload = json.loads(progress.read_text())
-        if payload.get("phase") != "experimenting":
-            progress.write_text(json.dumps({"phase": "experimenting"}))
-        return 0
-
     def parallel_batch_runner(**kwargs):
         parallel_calls.append(json.loads((research / "experiment_progress.json").read_text())["phase"])
         return {
@@ -602,7 +595,7 @@ def test_run_graph_protocol_bootstraps_parallel_baseline_before_worker_batch(tmp
 
     manager_agent.run.side_effect = manager_run
     critic_agent.run.side_effect = critic_run
-    exp_agent.run.side_effect = exp_run
+    exp_agent.run.return_value = 0
 
     loop = ResearchLoop(repo_path, research, cfg, events.append)
     exit_codes = loop.run_graph_protocol(
@@ -615,7 +608,7 @@ def test_run_graph_protocol_bootstraps_parallel_baseline_before_worker_batch(tmp
 
     assert exit_codes == {"manager": 0, "critic": 0, "exp": 0}
     assert parallel_calls == ["experimenting"]
-    assert exp_agent.run.call_count == 1
+    assert exp_agent.run.call_count == 0
 
 
 def test_run_graph_protocol_restores_local_git_identity_from_latest_commit(tmp_path):

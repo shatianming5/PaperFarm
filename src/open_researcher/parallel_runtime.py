@@ -32,7 +32,8 @@ class ParallelRuntimeProfile:
 
 def resolve_parallel_worker_count(cfg: ResearchConfig) -> tuple[int, str | None]:
     """Resolve the effective worker count for the current runtime environment."""
-    requested = max(int(cfg.max_workers or 0), 1)
+    requested_raw = int(cfg.max_workers or 0)
+    requested = max(requested_raw, 1)
     pinned_cuda = str(os.environ.get("CUDA_VISIBLE_DEVICES", "")).strip()
     if requested > 1 and pinned_cuda and not cfg.enable_gpu_allocation:
         reason = (
@@ -77,9 +78,20 @@ def build_parallel_worker_plugins(
 ) -> tuple[ParallelRuntimeProfile, WorkerRuntimePlugins]:
     """Build the concrete worker plugin bundle for the chosen runtime profile."""
     profile = resolve_parallel_runtime_profile(cfg)
+    gpu_manager = None
+    if profile.gpu_allocation:
+        gpu_manager = GPUManager(
+            research_dir / "gpu_status.json",
+            cfg.remote_hosts,
+            allow_same_gpu_packing=cfg.gpu_allow_same_gpu_packing,
+        )
     plugins = WorkerRuntimePlugins(
-        gpu_allocator=GPUAllocatorPlugin(GPUManager(research_dir / "gpu_status.json", cfg.remote_hosts))
-        if profile.gpu_allocation
+        gpu_allocator=GPUAllocatorPlugin(
+            gpu_manager,
+            default_memory_per_worker_mb=cfg.gpu_default_memory_per_worker_mb,
+            backfill_threshold_minutes=cfg.scheduler_backfill_threshold_minutes,
+        )
+        if gpu_manager is not None
         else None,
         failure_memory=FailureMemoryPlugin(FailureMemoryLedger(research_dir / "failure_memory_ledger.json"))
         if profile.failure_memory
@@ -87,6 +99,31 @@ def build_parallel_worker_plugins(
         workspace_isolation=WorktreeIsolationPlugin(repo_path) if profile.worktree_isolation else None,
     )
     return profile, plugins
+
+
+def estimate_parallel_frontier_target(research_dir: Path, cfg: ResearchConfig) -> int:
+    """Estimate how many runnable frontier items to project for the current capacity."""
+    requested_raw = int(cfg.max_workers or 0)
+    requested, _reason = resolve_parallel_worker_count(cfg)
+    if requested <= 0:
+        requested = 1
+    if not cfg.enable_gpu_allocation:
+        return requested
+    manager = GPUManager(
+        research_dir / "gpu_status.json",
+        cfg.remote_hosts,
+        allow_same_gpu_packing=cfg.gpu_allow_same_gpu_packing,
+    )
+    allocator = GPUAllocatorPlugin(
+        manager,
+        default_memory_per_worker_mb=cfg.gpu_default_memory_per_worker_mb,
+        backfill_threshold_minutes=cfg.scheduler_backfill_threshold_minutes,
+    )
+    slot_budget = requested if requested_raw > 0 else max(manager.estimate_packable_slots(
+        default_memory_mb=cfg.gpu_default_memory_per_worker_mb
+    ), 1)
+    slots = allocator.worker_slots(slot_budget)
+    return max(len(slots), 1)
 
 
 def run_parallel_experiment_batch(
@@ -108,7 +145,14 @@ def run_parallel_experiment_batch(
     idea_pool = IdeaPool(research_dir / "idea_pool.json")
     before = idea_pool.summary()
     profile, plugins = build_parallel_worker_plugins(repo_path, research_dir, cfg)
+    requested_raw = int(cfg.max_workers or 0)
     effective_workers, clamp_reason = resolve_parallel_worker_count(cfg)
+    if plugins.gpu_allocator is not None:
+        slot_budget = effective_workers if requested_raw > 0 else max(
+            estimate_parallel_frontier_target(research_dir, cfg),
+            1,
+        )
+        effective_workers = max(len(plugins.gpu_allocator.worker_slots(slot_budget)), 1)
     batch_started = 0
     batch_finished = 0
     failed_runs = 0
@@ -146,6 +190,7 @@ def run_parallel_experiment_batch(
         timeout_seconds=cfg.timeout,
         on_experiment_started=_on_started,
         on_experiment_finished=_on_finished,
+        backfill_threshold_minutes=cfg.scheduler_backfill_threshold_minutes,
     )
 
     on_output(

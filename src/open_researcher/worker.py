@@ -46,6 +46,7 @@ class WorkerManager:
         timeout_seconds: int = 0,
         on_experiment_started: Callable[[dict], None] | None = None,
         on_experiment_finished: Callable[[dict], bool | None] | None = None,
+        backfill_threshold_minutes: int = 30,
     ):
         self.repo_path = repo_path
         self.research_dir = research_dir
@@ -70,6 +71,7 @@ class WorkerManager:
         self._on_experiment_finished = on_experiment_finished
         self._fatal_errors = 0
         self._fatal_lock = threading.Lock()
+        self._backfill_threshold_minutes = max(int(backfill_threshold_minutes or 0), 1)
 
     def start(self) -> None:
         """Start worker threads based on available GPUs."""
@@ -230,26 +232,85 @@ class WorkerManager:
             time.sleep(0.2)
         return False
 
+    def _claim_next_runnable_idea(self, worker_name: str, slot_hint: dict | None):
+        allocator = self._plugins.gpu_allocator
+        if allocator is None:
+            idea = self.idea_pool.claim_idea(worker_name)
+            return idea, None, False
+
+        pending = self.idea_pool.pending_ideas(
+            default_gpu_mem_mb=allocator.default_memory_per_worker_mb,
+            backfill_threshold_minutes=self._backfill_threshold_minutes,
+        )
+        if not pending:
+            return None, None, False
+
+        preferred_id = allocator.select_claimable_idea(pending)
+        if preferred_id:
+            pending = sorted(
+                pending,
+                key=lambda item: 0 if str(item.get("id", "")).strip() == preferred_id else 1,
+            )
+
+        blocked = False
+        for candidate in pending:
+            claimed = self.idea_pool.claim_specific_idea(str(candidate.get("id", "")).strip(), worker_name)
+            if claimed is None:
+                continue
+            allocation = allocator.allocate_for_idea(worker_name, claimed, preferred=slot_hint)
+            if allocation is not None:
+                return claimed, allocation, False
+            blocked = True
+            claim_token = str(claimed.get("claim_token", "")).strip()
+            self.idea_pool.update_status(claimed["id"], "pending", claim_token=claim_token or None)
+        return None, None, blocked
+
+    @staticmethod
+    def _resource_observation(idea: dict, allocation, *, duration_seconds: float | None) -> dict:
+        observation: dict = {}
+        if duration_seconds is not None:
+            observation["duration_minutes"] = max(duration_seconds, 0.0) / 60.0
+        if allocation is not None:
+            reservations = allocation.reservations if getattr(allocation, "reservations", None) else []
+            if reservations:
+                observation["devices"] = [
+                    {"host": str(item.get("host", "")).strip(), "device": int(item.get("device", 0))}
+                    for item in reservations
+                ]
+                observation["gpu_count_allocated"] = len(reservations)
+                observation["gpu_mem_reserved_mb"] = sum(int(item.get("memory_mb", 0) or 0) for item in reservations)
+            if getattr(allocation, "resource_request", None):
+                observation["resource_request"] = allocation.resource_request
+        if idea.get("execution_shape"):
+            observation["execution_shape"] = idea.get("execution_shape")
+        if idea.get("workload_label"):
+            observation["workload_label"] = str(idea.get("workload_label", "")).strip()
+        if idea.get("resource_profile"):
+            observation["resource_profile"] = str(idea.get("resource_profile", "")).strip()
+        return observation
+
     def _worker_loop(self, worker_id: int, gpu: dict | None) -> None:
         wid = f"worker-{worker_id}"
-        allocation = None
         try:
-            allocation = (
-                self._plugins.gpu_allocator.allocate(wid, gpu) if self._plugins.gpu_allocator is not None else None
-            )
-            gpu_env = allocation.env if allocation is not None else {}
-            for line in allocation.log_lines if allocation is not None else []:
-                self.on_output(line)
-
             while not self._should_stop():
                 if not self._wait_until_unpaused():
                     break
                 if not self._reserve_claim_slot():
                     self.on_output(f"[{wid}] Claim budget exhausted, stopping")
                     break
-                idea = self.idea_pool.claim_idea(wid)
+                idea, allocation, resource_blocked = self._claim_next_runnable_idea(wid, gpu)
                 if not idea:
                     self._release_claim_slot()
+                    if resource_blocked:
+                        self._activity.update_worker(
+                            "experiment_agent",
+                            wid,
+                            status="waiting_resources",
+                            idea="",
+                        )
+                        self.on_output(f"[{wid}] No runnable ideas fit current resources, waiting")
+                        time.sleep(0.5)
+                        continue
                     self.on_output(f"[{wid}] No more pending ideas, stopping")
                     break
 
@@ -262,6 +323,7 @@ class WorkerManager:
                 run_code = 1
                 notify_finished = True
                 stop_after_finalize = False
+                run_started_at = None
                 try:
                     if not self._wait_until_unpaused():
                         applied = self.idea_pool.update_status(idea["id"], "pending", claim_token=claim_token or None)
@@ -302,8 +364,14 @@ class WorkerManager:
                         memory_policy="rank_historical_success" if memory_context is not None else "disabled",
                         ranked_fixes=ranked_fix_actions[:3],
                         first_fix_action=first_fix_action,
+                        gpu_reservations=(allocation.reservations if allocation is not None else []),
+                        workload_label=str(idea.get("workload_label", "")).strip(),
+                        resource_profile=str(idea.get("resource_profile", "")).strip(),
                     )
                     self.on_output(f"[{wid}] Running: {idea_description[:60]}")
+                    gpu_env = allocation.env if allocation is not None else {}
+                    for line in allocation.log_lines if allocation is not None else []:
+                        self.on_output(line)
                     if gpu_env:
                         self.on_output(f"[{wid}] Using GPU env: {gpu_env}")
 
@@ -354,9 +422,12 @@ class WorkerManager:
                         "OPEN_RESEARCHER_EXECUTION_ID": str(idea.get("execution_id", "")).strip(),
                         "OPEN_RESEARCHER_HYPOTHESIS_ID": str(idea.get("hypothesis_id", "")).strip(),
                         "OPEN_RESEARCHER_EXPERIMENT_SPEC_ID": str(idea.get("experiment_spec_id", "")).strip(),
+                        "OPEN_RESEARCHER_RESOURCE_PROFILE": str(idea.get("resource_profile", "")).strip(),
+                        "OPEN_RESEARCHER_WORKLOAD_LABEL": str(idea.get("workload_label", "")).strip(),
                     }
                     run_env = {key: value for key, value in run_env.items() if value}
                     watchdog.reset()
+                    run_started_at = time.monotonic()
                     try:
                         code = agent.run(
                             workdir,
@@ -388,6 +459,13 @@ class WorkerManager:
                                         metric_value=metric_value,
                                         verdict=verdict,
                                         claim_token=claim_token or None,
+                                        resource_observation=self._resource_observation(
+                                            idea,
+                                            allocation,
+                                            duration_seconds=(
+                                                time.monotonic() - run_started_at if run_started_at is not None else None
+                                            ),
+                                        ),
                                     )
                                     if not applied:
                                         self.on_output(
@@ -423,6 +501,13 @@ class WorkerManager:
                                 metric_value=None,
                                 verdict="completed",
                                 claim_token=claim_token or None,
+                                resource_observation=self._resource_observation(
+                                    idea,
+                                    allocation,
+                                    duration_seconds=(
+                                        time.monotonic() - run_started_at if run_started_at is not None else None
+                                    ),
+                                ),
                             )
                             if not applied:
                                 self.on_output(
@@ -432,7 +517,16 @@ class WorkerManager:
                     else:
                         if not self._terminal_result_present(current_state):
                             applied = self.idea_pool.update_status(
-                                idea["id"], "skipped", claim_token=claim_token or None
+                                idea["id"],
+                                "skipped",
+                                claim_token=claim_token or None,
+                                resource_observation=self._resource_observation(
+                                    idea,
+                                    allocation,
+                                    duration_seconds=(
+                                        time.monotonic() - run_started_at if run_started_at is not None else None
+                                    ),
+                                ),
                             )
                             if not applied:
                                 self.on_output(
@@ -466,11 +560,20 @@ class WorkerManager:
                     self.stop()
                 except Exception as exc:
                     self.on_output(f"[{wid}] Error: {exc}")
-                    applied = self.idea_pool.update_status(idea["id"], "skipped", claim_token=claim_token or None)
+                    applied = self.idea_pool.update_status(
+                        idea["id"],
+                        "skipped",
+                        claim_token=claim_token or None,
+                        resource_observation=self._resource_observation(
+                            idea,
+                            allocation,
+                            duration_seconds=(time.monotonic() - run_started_at if run_started_at is not None else None),
+                        ),
+                    )
                     if not applied:
-                            self.on_output(
-                                f"[{wid}] Claim race detected for {idea['id']}; error skip suppressed, cleanup applied"
-                            )
+                        self.on_output(
+                            f"[{wid}] Claim race detected for {idea['id']}; error skip suppressed, cleanup applied"
+                        )
                     run_code = 1
                 finally:
                     try:
@@ -505,6 +608,9 @@ class WorkerManager:
                             self.stop()
                     if stop_after_finalize:
                         self.stop()
+                    if self._plugins.gpu_allocator is not None and allocation is not None:
+                        self._plugins.gpu_allocator.release(allocation)
+                    self._release_claim_slot()
         except Exception as exc:
             self._record_fatal_error()
             self.on_output(f"[{wid}] Fatal worker error: {exc}")
@@ -512,5 +618,3 @@ class WorkerManager:
             self.stop()
         finally:
             self._activity.update_worker("experiment_agent", wid, status="idle")
-            if self._plugins.gpu_allocator is not None and allocation is not None:
-                self._plugins.gpu_allocator.release(allocation)

@@ -10,6 +10,13 @@ from filelock import FileLock
 
 from open_researcher.memory_policy import apply_history_policy as apply_frontier_history_policy
 from open_researcher.memory_policy import build_family_key
+from open_researcher.resource_scheduler import (
+    is_backfill_candidate,
+    normalize_execution_shape,
+    normalize_expected_duration_minutes,
+    normalize_resource_request,
+    utility_density,
+)
 from open_researcher.storage import atomic_write_json, locked_read_json, locked_update_json
 
 FRONTIER_STATUSES = {
@@ -95,6 +102,7 @@ def _default_graph() -> dict:
             "primary_metric": "",
             "direction": "",
             "source": "bootstrap",
+            "resource_capabilities": {},
         },
         "hypotheses": [],
         "experiment_specs": [],
@@ -136,6 +144,8 @@ class ResearchGraphStore:
             repo_profile = {}
         merged_profile = dict(_default_graph()["repo_profile"])
         merged_profile.update(repo_profile)
+        capabilities = merged_profile.get("resource_capabilities")
+        merged_profile["resource_capabilities"] = capabilities if isinstance(capabilities, dict) else {}
         normalized["repo_profile"] = merged_profile
         counters = normalized.get("counters")
         if not isinstance(counters, dict):
@@ -228,6 +238,18 @@ class ResearchGraphStore:
                     "attribution_focus": str(row.get("attribution_focus", "")).strip(),
                     "expected_signal": str(row.get("expected_signal", "")).strip(),
                     "risk_level": str(row.get("risk_level", "medium")).strip() or "medium",
+                    "resource_request": normalize_resource_request(
+                        row.get("resource_request"),
+                        default_gpu_mem_mb=0,
+                        fallback_gpu_hint=row.get("gpu_hint"),
+                    ),
+                    "execution_shape": normalize_execution_shape(row.get("execution_shape")),
+                    "expected_duration_minutes": normalize_expected_duration_minutes(
+                        row.get("expected_duration_minutes")
+                    ),
+                    "resource_profile": str(row.get("resource_profile", "")).strip(),
+                    "workload_label": str(row.get("workload_label", "")).strip(),
+                    "anchor_role": self._normalize_anchor_role(row.get("anchor_role")),
                 }
             )
         return normalized
@@ -289,6 +311,7 @@ class ResearchGraphStore:
                         allowed=EVIDENCE_REASON_CODES,
                     ),
                     "result_signature": str(row.get("result_signature", "")).strip(),
+                    "resource_observation": self._normalize_resource_observation(row.get("resource_observation")),
                 }
             )
         return normalized
@@ -424,10 +447,19 @@ class ResearchGraphStore:
                 row.get("runtime_priority", manager_priority),
                 default=manager_priority,
             )
+            scores = self._normalize_scores(row.get("scores"))
             family_key = str(row.get("family_key", "")).strip() or build_family_key(
                 row,
                 hypothesis_row,
                 spec_row,
+            )
+            resource_request = normalize_resource_request(
+                row.get("resource_request", spec_row.get("resource_request")),
+                default_gpu_mem_mb=0,
+                fallback_gpu_hint=row.get("gpu_hint"),
+            )
+            expected_duration_minutes = normalize_expected_duration_minutes(
+                row.get("expected_duration_minutes", spec_row.get("expected_duration_minutes"))
             )
             normalized.append(
                 {
@@ -478,10 +510,45 @@ class ResearchGraphStore:
                     "attribution_focus": str(
                         row.get("attribution_focus", "") or spec_row.get("attribution_focus", "")
                     ).strip(),
-                    "scores": self._normalize_scores(row.get("scores")),
+                    "scores": scores,
+                    "resource_request": resource_request,
+                    "execution_shape": normalize_execution_shape(
+                        row.get("execution_shape", spec_row.get("execution_shape"))
+                    ),
+                    "expected_duration_minutes": expected_duration_minutes,
+                    "resource_profile": str(
+                        row.get("resource_profile", "") or spec_row.get("resource_profile", "")
+                    ).strip(),
+                    "workload_label": str(
+                        row.get("workload_label", "") or spec_row.get("workload_label", "")
+                    ).strip(),
+                    "anchor_role": self._normalize_anchor_role(
+                        row.get("anchor_role", spec_row.get("anchor_role"))
+                    ),
+                    "utility_density": utility_density(
+                        scores,
+                        resource_request=resource_request,
+                        expected_duration_minutes=expected_duration_minutes,
+                    ),
+                    "backfill_candidate": is_backfill_candidate(
+                        resource_request=resource_request,
+                        expected_duration_minutes=expected_duration_minutes,
+                        threshold_minutes=30,
+                    ),
+                    "resource_observation": self._normalize_resource_observation(row.get("resource_observation")),
                 }
             )
         return normalized
+
+    def _frontier_sort_key(self, item: dict) -> tuple:
+        return (
+            0 if not bool(item.get("backfill_candidate", False)) else 1,
+            -float(item.get("utility_density", 0.0) or 0.0),
+            int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
+            int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
+            normalize_expected_duration_minutes(item.get("expected_duration_minutes")),
+            str(item.get("id", "")),
+        )
 
     def _normalize_priority(self, value, *, default: int = 5) -> int:
         try:
@@ -501,6 +568,47 @@ class ResearchGraphStore:
             except (TypeError, ValueError):
                 continue
         return normalized
+
+    def _normalize_resource_observation(self, value) -> dict:
+        if not isinstance(value, dict):
+            return {}
+        normalized: dict = {}
+        if "duration_minutes" in value:
+            normalized["duration_minutes"] = normalize_expected_duration_minutes(value.get("duration_minutes"))
+        try:
+            if "gpu_mem_reserved_mb" in value:
+                normalized["gpu_mem_reserved_mb"] = max(int(value.get("gpu_mem_reserved_mb") or 0), 0)
+            if "gpu_count_allocated" in value:
+                normalized["gpu_count_allocated"] = max(int(value.get("gpu_count_allocated") or 0), 0)
+        except (TypeError, ValueError):
+            pass
+        if isinstance(value.get("devices"), list):
+            devices = []
+            for item in value.get("devices", []):
+                if not isinstance(item, dict):
+                    continue
+                host = str(item.get("host", "")).strip()
+                try:
+                    device = int(item.get("device"))
+                except (TypeError, ValueError):
+                    continue
+                if host:
+                    devices.append({"host": host, "device": device})
+            if devices:
+                normalized["devices"] = devices
+        if "resource_request" in value:
+            normalized["resource_request"] = normalize_resource_request(value.get("resource_request"))
+        if "execution_shape" in value:
+            normalized["execution_shape"] = normalize_execution_shape(value.get("execution_shape"))
+        if "workload_label" in value:
+            normalized["workload_label"] = str(value.get("workload_label", "")).strip()
+        if "resource_profile" in value:
+            normalized["resource_profile"] = str(value.get("resource_profile", "")).strip()
+        return normalized
+
+    def _normalize_anchor_role(self, value) -> str:
+        role = str(value or "").strip()
+        return "anchor" if role == "anchor" else ""
 
     def _normalize_policy_state(self, value) -> str:
         state = str(value or "").strip() or "neutral"
@@ -646,13 +754,7 @@ class ResearchGraphStore:
         wanted = statuses or self.EXECUTABLE_FRONTIER_STATUSES
         data = self.read()
         rows = [item for item in data["frontier"] if str(item.get("status", "")) in wanted]
-        rows.sort(
-            key=lambda item: (
-                int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
-                int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
-                str(item.get("id", "")),
-            )
-        )
+        rows.sort(key=self._frontier_sort_key)
         if max_items is not None and max_items > 0:
             return rows[:max_items]
         return rows
@@ -675,13 +777,7 @@ class ResearchGraphStore:
                 for item in normalized["frontier"]
                 if str(item.get("status", "")).strip() in self.EXECUTABLE_FRONTIER_STATUSES
             ]
-            projected.sort(
-                key=lambda item: (
-                    int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
-                    int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
-                    str(item.get("id", "")),
-                )
-            )
+            projected.sort(key=self._frontier_sort_key)
             if max_items is not None and max_items > 0:
                 projected = projected[:max_items]
 
@@ -734,6 +830,15 @@ class ResearchGraphStore:
                         "attribution_focus": str(item.get("attribution_focus", "")).strip()
                         or str(spec.get("attribution_focus", "")).strip(),
                         "scores": item.get("scores", {}),
+                        "resource_request": item.get("resource_request", {}),
+                        "execution_shape": item.get("execution_shape", {}),
+                        "expected_duration_minutes": item.get("expected_duration_minutes", 60),
+                        "resource_profile": str(item.get("resource_profile", "")).strip(),
+                        "workload_label": str(item.get("workload_label", "")).strip(),
+                        "anchor_role": self._normalize_anchor_role(item.get("anchor_role")),
+                        "utility_density": float(item.get("utility_density", 0.0) or 0.0),
+                        "backfill_candidate": bool(item.get("backfill_candidate", False)),
+                        "resource_observation": item.get("resource_observation", {}),
                         "protocol": "research-v1",
                         "hypothesis_summary": str(hypothesis.get("summary", "")).strip(),
                         "hypothesis_rationale": str(hypothesis.get("rationale", "")).strip(),
@@ -749,13 +854,7 @@ class ResearchGraphStore:
                     }
                 )
                 trace_items.append(self._frontier_trace(item))
-            ideas.sort(
-                key=lambda item: (
-                    int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
-                    int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
-                    str(item.get("id", "")),
-                )
-            )
+            ideas.sort(key=self._frontier_sort_key)
             data.clear()
             data.update(normalized)
             return {"ideas": ideas, "items": trace_items}
@@ -884,6 +983,26 @@ class ResearchGraphStore:
                 frontier_item["terminal_status"] = idea_status
                 frontier_item["primary_metric"] = primary_metric or ""
                 frontier_item["metric_value"] = metric_value
+                frontier_item["resource_request"] = normalize_resource_request(
+                    idea.get("resource_request", frontier_item.get("resource_request")),
+                    default_gpu_mem_mb=0,
+                    fallback_gpu_hint=idea.get("gpu_hint"),
+                )
+                frontier_item["execution_shape"] = normalize_execution_shape(
+                    idea.get("execution_shape", frontier_item.get("execution_shape"))
+                )
+                frontier_item["expected_duration_minutes"] = normalize_expected_duration_minutes(
+                    idea.get("expected_duration_minutes", frontier_item.get("expected_duration_minutes"))
+                )
+                frontier_item["resource_profile"] = str(
+                    idea.get("resource_profile", "") or frontier_item.get("resource_profile", "")
+                ).strip()
+                frontier_item["workload_label"] = str(
+                    idea.get("workload_label", "") or frontier_item.get("workload_label", "")
+                ).strip()
+                frontier_item["resource_observation"] = self._normalize_resource_observation(
+                    idea.get("resource_observation")
+                )
                 execution_id = (
                     str(idea.get("execution_id", "")).strip()
                     or str(frontier_item.get("active_execution_id", "")).strip()
@@ -925,6 +1044,9 @@ class ResearchGraphStore:
                                     "reproduction_run" if bool(idea.get("repro_required", False)) else "result_observed"
                                 ),
                                 "result_signature": signature,
+                                "resource_observation": self._normalize_resource_observation(
+                                    idea.get("resource_observation")
+                                ),
                             }
                         )
                         frontier_item["evidence_id"] = evidence_id
@@ -935,7 +1057,11 @@ class ResearchGraphStore:
                 else:
                     best_before = self._best_result_value(results_rows, direction_value)
 
-                frontier_item["repro_required"] = self._should_require_repro(
+                anchor_pending = self._anchor_frontier_pending(
+                    normalized["frontier"],
+                    current_frontier_id=str(frontier_item.get("id", "")).strip(),
+                )
+                frontier_item["repro_required"] = anchor_pending or self._should_require_repro(
                     repro_policy,
                     metric_value=metric_value,
                     best_before=best_before,
@@ -1105,6 +1231,24 @@ class ResearchGraphStore:
             "hypothesis_id": str(trace.get("hypothesis_id", "")).strip(),
             "experiment_spec_id": str(trace.get("experiment_spec_id", "")).strip(),
         }
+
+    def _anchor_frontier_pending(self, frontier_rows: list[dict], *, current_frontier_id: str) -> bool:
+        anchor_rows = [
+            row
+            for row in frontier_rows
+            if isinstance(row, dict) and self._normalize_anchor_role(row.get("anchor_role")) == "anchor"
+        ]
+        if not anchor_rows:
+            return False
+        for row in anchor_rows:
+            frontier_id = str(row.get("id", "")).strip()
+            if frontier_id == current_frontier_id:
+                return False
+            if str(row.get("claim_state", "")).strip() == "promoted":
+                return False
+            if str(row.get("review_reason_code", "")).strip() == "strong_evidence":
+                return False
+        return True
 
     def _best_result_value(
         self,

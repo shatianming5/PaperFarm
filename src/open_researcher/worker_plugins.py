@@ -13,6 +13,12 @@ from open_researcher.failure_memory import (
     classify_failure,
 )
 from open_researcher.gpu_manager import GPUManager
+from open_researcher.resource_scheduler import (
+    normalize_resource_request,
+    resolve_gpu_count,
+    resolve_gpu_mem_mb,
+    sort_pending_ideas,
+)
 from open_researcher.worktree import create_worktree, remove_worktree
 
 logger = logging.getLogger(__name__)
@@ -28,6 +34,9 @@ class GPUAllocation:
 
     host: str | None = None
     device: int | None = None
+    devices: list[dict] = field(default_factory=list)
+    reservations: list[dict] = field(default_factory=list)
+    resource_request: dict = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     log_lines: list[str] = field(default_factory=list)
 
@@ -35,43 +44,156 @@ class GPUAllocation:
 class GPUAllocatorPlugin:
     """Optional GPU scheduling capability for worker execution."""
 
-    def __init__(self, manager: GPUManager):
+    def __init__(
+        self,
+        manager: GPUManager,
+        *,
+        default_memory_per_worker_mb: int = 4096,
+        backfill_threshold_minutes: int = 30,
+    ):
         self.manager = manager
+        self.default_memory_per_worker_mb = max(int(default_memory_per_worker_mb or 0), 0)
+        self.backfill_threshold_minutes = max(int(backfill_threshold_minutes or 0), 1)
 
     def worker_slots(self, max_workers: int) -> list[dict | None]:
+        if max_workers <= 0:
+            return []
         try:
-            gpus = self.manager.refresh()
+            slots = self.manager.plan_slots(
+                max_workers=max_workers,
+                memory_mb=max(self.default_memory_per_worker_mb, 1),
+            )
         except Exception:
-            gpus = []
-        available = [gpu for gpu in gpus if gpu.get("allocated_to") is None]
-        if available:
-            limit = min(max_workers, len(available)) if max_workers > 0 else len(available)
-            return available[: max(limit, 1)]
-        fallback = min(max_workers, 1) if max_workers > 0 else 1
+            slots = []
+        if isinstance(slots, list) and slots:
+            return slots
+        fallback = max(max_workers, 1)
         return [None] * max(fallback, 1)
 
-    def allocate(self, worker_id: str, gpu: dict | None) -> GPUAllocation:
-        if gpu is None:
-            return GPUAllocation()
+    def describe_request(self, idea: dict) -> dict:
+        request = normalize_resource_request(
+            idea.get("resource_request"),
+            default_gpu_mem_mb=self.default_memory_per_worker_mb,
+            fallback_gpu_hint=idea.get("gpu_hint"),
+        )
+        try:
+            status = self.manager.refresh()
+        except Exception:
+            status = []
+        if not isinstance(status, list):
+            status = []
+        gpu_count = resolve_gpu_count(request, gpu_available=bool(status))
+        request = dict(request)
+        request["gpu_count"] = gpu_count
+        request["gpu_mem_mb"] = resolve_gpu_mem_mb(
+            request,
+            default_gpu_mem_mb=self.default_memory_per_worker_mb,
+            gpu_count=int(gpu_count or 0),
+        )
+        return request
 
-        alloc_result = self.manager.allocate(tag=worker_id)
-        if alloc_result is not None:
-            host, device = alloc_result
-        else:
-            host, device = gpu["host"], gpu["device"]
+    def _request_fits(self, request: dict, status: list[dict]) -> bool:
+        requested_gpu_count = resolve_gpu_count(request, gpu_available=bool(status))
+        if requested_gpu_count <= 0:
+            return True
+        requested_mem = max(
+            resolve_gpu_mem_mb(
+                request,
+                default_gpu_mem_mb=self.default_memory_per_worker_mb,
+                gpu_count=requested_gpu_count,
+            ),
+            1,
+        )
+        matched = 0
+        for gpu in status:
+            if self.manager.effective_free_mb(gpu) < requested_mem:
+                continue
+            reservations = gpu.get("reservations", [])
+            has_existing = bool(reservations)
+            if has_existing and not self.manager.allow_same_gpu_packing:
+                continue
+            if has_existing and bool(request.get("exclusive", False)):
+                continue
+            if has_existing and not bool(request.get("shareable", True)):
+                continue
+            matched += 1
+            if matched >= requested_gpu_count:
+                return True
+        return False
+
+    def select_claimable_idea(self, pending_ideas: list[dict]) -> str | None:
+        if not pending_ideas:
+            return None
+        ordered = sort_pending_ideas(
+            pending_ideas,
+            default_gpu_mem_mb=self.default_memory_per_worker_mb,
+            backfill_threshold_minutes=self.backfill_threshold_minutes,
+        )
+        try:
+            status = self.manager.refresh()
+        except Exception:
+            status = []
+        if not isinstance(status, list):
+            status = []
+        for idea in ordered:
+            if self._request_fits(self.describe_request(idea), status):
+                idea_id = str(idea.get("id", "")).strip()
+                if idea_id:
+                    return idea_id
+        return None
+
+    def allocate_for_idea(self, worker_id: str, idea: dict, preferred: dict | None = None) -> GPUAllocation | None:
+        request = self.describe_request(idea)
+        gpu_count = int(request.get("gpu_count", 0) or 0)
+        if gpu_count <= 0:
+            return GPUAllocation(resource_request=request)
+        metadata = {
+            "kind": "experiment",
+            "task_kind": str(idea.get("workload_label", "")).strip(),
+            "frontier_id": str(idea.get("frontier_id", "")).strip(),
+            "execution_id": str(idea.get("execution_id", "")).strip(),
+            "resource_profile": str(idea.get("resource_profile", "")).strip(),
+            "workload_label": str(idea.get("workload_label", "")).strip(),
+        }
+        try:
+            reservations = self.manager.reserve(worker_id, request, metadata=metadata, preferred=preferred)
+        except Exception:
+            logger.debug("GPU reservation failed", exc_info=True)
+            return None
+        if not isinstance(reservations, list):
+            return None
+        if reservations is None:
+            return None
+        visible_devices = ",".join(str(item.get("device")) for item in reservations)
+        host = str(reservations[0].get("host", "local")).strip() if reservations else None
+        device = int(reservations[0].get("device", 0)) if reservations else None
+        reserved_mb = sum(int(item.get("memory_mb", 0) or 0) for item in reservations)
 
         return GPUAllocation(
             host=host,
             device=device,
-            env={"CUDA_VISIBLE_DEVICES": str(device)},
-            log_lines=[f"[{worker_id}] Allocated GPU {host}:{device}"],
+            devices=[
+                {"host": str(item.get("host", "local")).strip(), "device": int(item.get("device", 0))}
+                for item in reservations
+            ],
+            reservations=reservations,
+            resource_request=request,
+            env={
+                "CUDA_VISIBLE_DEVICES": visible_devices,
+                "OPEN_RESEARCHER_GPU_MEMORY_BUDGET_MB": str(int(request.get("gpu_mem_mb", 0) or 0)),
+                "OPEN_RESEARCHER_GPU_COUNT": str(int(request.get("gpu_count", 0) or 0)),
+            },
+            log_lines=[
+                f"[{worker_id}] Reserved {len(reservations)} GPU(s) on {visible_devices or 'cpu'} "
+                f"(budget {reserved_mb} MiB)"
+            ],
         )
 
     def release(self, allocation: GPUAllocation) -> None:
-        if allocation.host is None or allocation.device is None:
+        if not allocation.reservations:
             return
         try:
-            self.manager.release(allocation.host, allocation.device)
+            self.manager.release_reservations(allocation.reservations)
         except Exception:
             logger.debug("GPU release failed", exc_info=True)
 
@@ -163,10 +285,14 @@ def build_default_worker_plugins(
     repo_path: Path,
     research_dir: Path,
     gpu_manager: GPUManager | None,
+    *,
+    default_gpu_memory_mb: int = 4096,
 ) -> WorkerRuntimePlugins:
     """Build the default research-v1 worker runtime plugins."""
     return WorkerRuntimePlugins(
-        gpu_allocator=GPUAllocatorPlugin(gpu_manager) if gpu_manager is not None else None,
+        gpu_allocator=GPUAllocatorPlugin(gpu_manager, default_memory_per_worker_mb=default_gpu_memory_mb)
+        if gpu_manager is not None
+        else None,
         failure_memory=FailureMemoryPlugin(FailureMemoryLedger(research_dir / "failure_memory_ledger.json")),
         workspace_isolation=WorktreeIsolationPlugin(repo_path),
     )
@@ -176,10 +302,13 @@ def build_legacy_worker_plugins(
     repo_path: Path,
     research_dir: Path,
     gpu_manager: GPUManager | None,
+    *,
+    default_gpu_memory_mb: int = 4096,
 ) -> WorkerRuntimePlugins:
     """Backward-compatible alias for the default worker runtime plugins."""
     return build_default_worker_plugins(
         repo_path=repo_path,
         research_dir=research_dir,
         gpu_manager=gpu_manager,
+        default_gpu_memory_mb=default_gpu_memory_mb,
     )
