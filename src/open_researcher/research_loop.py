@@ -14,15 +14,16 @@ from filelock import FileLock
 from open_researcher.activity import ActivityMonitor
 from open_researcher.config import ResearchConfig
 from open_researcher.crash_counter import CrashCounter
+from open_researcher.git_identity import ensure_local_git_identity
 from open_researcher.git_safety import (
     GitWorkspaceError,
     capture_clean_workspace_snapshot,
     ensure_clean_workspace,
     rollback_workspace,
 )
-from open_researcher.git_identity import ensure_local_git_identity
-from open_researcher.phase_gate import PhaseGate
+from open_researcher.graph_context import enforce_context_token_limit, filter_graph_for_context
 from open_researcher.parallel_runtime import estimate_parallel_frontier_target
+from open_researcher.phase_gate import PhaseGate
 from open_researcher.research_events import (
     AgentOutput,
     AllIdeasProcessed,
@@ -51,19 +52,16 @@ from open_researcher.research_events import (
     TokenBudgetWarning,
     TokenMetricsUpdated,
 )
-from open_researcher.token_tracking import (
-    BudgetCheckResult,
-    TokenLedger,
-    TokenMetrics,
-    estimate_cost,
-    estimate_tokens,
-    save_ledger,
-)
-from open_researcher.graph_context import enforce_context_token_limit, filter_graph_for_context
 from open_researcher.research_graph import ResearchGraphStore
 from open_researcher.research_memory import ResearchMemoryStore
 from open_researcher.results_cmd import load_results, write_final_results_tsv
 from open_researcher.storage import atomic_write_json, locked_read_json
+from open_researcher.token_tracking import (
+    BudgetCheckResult,
+    TokenLedger,
+    TokenMetrics,
+    save_ledger,
+)
 from open_researcher.watchdog import TimeoutWatchdog
 
 
@@ -199,7 +197,8 @@ class ResearchLoop:
         if result.action == "stop":
             return "stop"
         if result.action == "pause":
-            self._pause(self.research_dir, f"Token budget exceeded ({self.token_ledger.cumulative.tokens_total:,} tokens)")
+            msg = f"Token budget exceeded ({self.token_ledger.cumulative.tokens_total:,} tokens)"
+            self._pause(self.research_dir, msg)
         return None
 
     @contextmanager

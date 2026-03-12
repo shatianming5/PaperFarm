@@ -465,7 +465,9 @@ class WorkerManager:
                                             idea,
                                             allocation,
                                             duration_seconds=(
-                                                time.monotonic() - run_started_at if run_started_at is not None else None
+                                                time.monotonic() - run_started_at
+                                                if run_started_at is not None
+                                                else None
                                             ),
                                         ),
                                     )
@@ -569,7 +571,9 @@ class WorkerManager:
                         resource_observation=self._resource_observation(
                             idea,
                             allocation,
-                            duration_seconds=(time.monotonic() - run_started_at if run_started_at is not None else None),
+                            duration_seconds=(
+                                time.monotonic() - run_started_at if run_started_at is not None else None
+                            ),
                         ),
                     )
                     if not applied:

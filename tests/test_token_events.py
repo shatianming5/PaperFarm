@@ -1,11 +1,11 @@
 from open_researcher.research_events import (
-    TokenMetricsUpdated,
-    TokenBudgetWarning,
     TokenBudgetExceeded,
-    event_name,
-    event_phase,
+    TokenBudgetWarning,
+    TokenMetricsUpdated,
     event_level,
+    event_name,
     event_payload,
+    event_phase,
 )
 
 

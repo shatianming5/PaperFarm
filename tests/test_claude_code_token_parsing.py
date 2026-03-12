@@ -1,4 +1,5 @@
 import json
+
 from open_researcher.agents.claude_code import ClaudeCodeAdapter
 
 

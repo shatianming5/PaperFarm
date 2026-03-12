@@ -1,5 +1,5 @@
+
 from open_researcher.agents.base import AgentAdapter
-from pathlib import Path
 
 
 class StubAdapter(AgentAdapter):

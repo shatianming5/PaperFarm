@@ -10,7 +10,6 @@ from filelock import FileLock
 
 from open_researcher.storage import atomic_write_json
 
-
 # ---------------------------------------------------------------------------
 # Task 1: TokenMetrics and TokenLedger
 # ---------------------------------------------------------------------------
