@@ -108,6 +108,13 @@ PaperFarm results --chart primary
 
 ---
 
+## 📚 Documentation Guide
+
+- **Current architecture/runtime contract**: `README.md`, `docs/architecture-review.md`, `docs/repo_inventory.md`
+- **Historical implementation records**: `docs/plans/` (archive; context only, not canonical behavior)
+
+---
+
 ## 🚜 How It Works
 
 Open Researcher generates a `.research/` directory in your repo with everything needed for autonomous research.

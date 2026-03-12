@@ -42,3 +42,4 @@ make format  # auto-fix
 - One feature per PR
 - Include tests
 - Run `make ci` before submitting
+- For architecture/runtime changes, align with `README.md`, `docs/architecture-review.md`, and `docs/repo_inventory.md` (treat `docs/plans/` as historical archive).

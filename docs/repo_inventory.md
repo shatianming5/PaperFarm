@@ -9,6 +9,10 @@
 - `analysis/`: 分析记录
 - `.research/`: 运行期状态目录
 
+## Docs Contract
+- 当前架构/运行时说明以 `README.md`、`docs/architecture-review.md`、本文件为准。
+- `docs/plans/` 为历史计划归档（见 `docs/plans/README.md`），内容可用于背景追溯，但不作为当前行为契约。
+
 ## Entry Points
 - `pyproject.toml`: 暴露 `open-researcher = open_researcher.cli:app`
 - `src/open_researcher/cli.py`: 主 CLI，包含 `run/init/status/results/export/doctor/demo`
