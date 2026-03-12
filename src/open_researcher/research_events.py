@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from typing import Callable, Literal, TypeAlias
 
-PhaseName = Literal["init", "scouting", "preparing", "reviewing", "experimenting", "done"]
-LogLevel = Literal["info", "error"]
+PhaseName = Literal["init", "scouting", "preparing", "reviewing", "experimenting", "budget", "done"]
+LogLevel = Literal["info", "warning", "error"]
 
 
 @dataclass(slots=True)
@@ -198,6 +198,30 @@ class SessionFailed:
     exit_code: int
 
 
+@dataclass(slots=True)
+class TokenMetricsUpdated:
+    phase: str
+    experiment_num: int | None
+    tokens_input: int
+    tokens_output: int
+    tokens_total: int
+    budget_remaining: int | None
+
+
+@dataclass(slots=True)
+class TokenBudgetWarning:
+    tokens_used: int
+    token_budget: int
+    ratio: float
+
+
+@dataclass(slots=True)
+class TokenBudgetExceeded:
+    tokens_used: int
+    token_budget: int
+    policy: str
+
+
 ResearchEvent: TypeAlias = (
     SessionStarted
     | ScoutStarted
@@ -230,6 +254,9 @@ ResearchEvent: TypeAlias = (
     | AllIdeasProcessed
     | SessionCompleted
     | SessionFailed
+    | TokenMetricsUpdated
+    | TokenBudgetWarning
+    | TokenBudgetExceeded
 )
 EventHandler = Callable[[ResearchEvent], None]
 
@@ -298,6 +325,12 @@ def event_name(event: ResearchEvent) -> str:
         return "session_completed"
     if isinstance(event, SessionFailed):
         return "session_failed"
+    if isinstance(event, TokenMetricsUpdated):
+        return "token_metrics_updated"
+    if isinstance(event, TokenBudgetWarning):
+        return "token_budget_warning"
+    if isinstance(event, TokenBudgetExceeded):
+        return "token_budget_exceeded"
     raise TypeError(f"Unsupported event type: {type(event)!r}")
 
 
@@ -339,14 +372,20 @@ def event_phase(event: ResearchEvent) -> PhaseName:
         return "experimenting"
     if isinstance(event, (AllIdeasProcessed, SessionCompleted, SessionFailed)):
         return "done"
+    if isinstance(event, TokenMetricsUpdated):
+        return event.phase
+    if isinstance(event, (TokenBudgetWarning, TokenBudgetExceeded)):
+        return "budget"
     raise TypeError(f"Unsupported event type: {type(event)!r}")
 
 
 def event_level(event: ResearchEvent) -> LogLevel:
     """Return the default log level for an event."""
+    if isinstance(event, TokenBudgetWarning):
+        return "warning"
     if isinstance(
         event,
-        (ScoutFailed, PrepareFailed, RoleFailed, CrashLimitReached, ExperimentPreflightFailed, SessionFailed),
+        (ScoutFailed, PrepareFailed, RoleFailed, CrashLimitReached, ExperimentPreflightFailed, SessionFailed, TokenBudgetExceeded),
     ):
         return "error"
     return "info"
@@ -478,4 +517,30 @@ def event_payload(event: ResearchEvent) -> dict:
         }
     if isinstance(event, PhaseTransition):
         return {"phase": event.next_phase}
+    if isinstance(event, TokenMetricsUpdated):
+        payload = {
+            "phase": event.phase,
+            "tokens_input": event.tokens_input,
+            "tokens_output": event.tokens_output,
+            "tokens_total": event.tokens_total,
+        }
+        if event.experiment_num is not None:
+            payload["experiment_num"] = event.experiment_num
+        if event.budget_remaining is not None:
+            payload["budget_remaining"] = event.budget_remaining
+        return payload
+    if isinstance(event, TokenBudgetWarning):
+        return {
+            "tokens_used": event.tokens_used,
+            "token_budget": event.token_budget,
+            "ratio": event.ratio,
+            "detail": f"Token budget {event.ratio:.0%} used ({event.tokens_used:,} / {event.token_budget:,})",
+        }
+    if isinstance(event, TokenBudgetExceeded):
+        return {
+            "tokens_used": event.tokens_used,
+            "token_budget": event.token_budget,
+            "policy": event.policy,
+            "detail": f"Token budget exceeded ({event.tokens_used:,} / {event.token_budget:,}), policy={event.policy}",
+        }
     return {}
