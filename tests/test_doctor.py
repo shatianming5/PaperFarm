@@ -82,20 +82,21 @@ def valid_repo(tmp_path):
 def test_doctor_valid_repo(valid_repo):
     """All file-based checks pass in a properly set-up repo."""
     checks = run_doctor(valid_repo)
-    check_map = {c["check"]: c["status"] for c in checks}
-    assert check_map["Git repository"] == "OK"
-    assert check_map[".research/ directory"] == "OK"
-    assert check_map["config.yaml"] == "OK"
-    assert check_map["research.protocol"] == "OK"
-    assert check_map["results.tsv"] == "OK"
-    assert check_map["research_graph.json"] == "OK"
-    assert check_map["research_memory.json"] == "OK"
-    assert check_map["idea_pool.json"] == "OK"
-    assert check_map["activity.json"] == "OK"
-    assert check_map["role programs"] == "OK"
-    assert check_map["experiment_progress.json"] == "OK"
-    assert check_map["events.jsonl"] == "OK"
-    assert check_map["Python >= 3.10"] == "OK"
+    check_map = {c["check"]: c for c in checks}
+    assert check_map["Git repository"]["status"] == "OK"
+    assert check_map[".research/ directory"]["status"] == "OK"
+    assert check_map["config.yaml"]["status"] == "OK"
+    assert check_map["research.protocol"]["status"] == "OK"
+    assert check_map["results.tsv"]["status"] == "OK"
+    assert check_map["research_graph.json"]["status"] == "OK"
+    assert check_map["research_memory.json"]["status"] == "OK"
+    assert check_map["idea_pool.json"]["status"] == "OK"
+    assert check_map["activity.json"]["status"] == "OK"
+    assert check_map["role programs"]["status"] == "OK"
+    assert ".internal/role_programs" not in check_map["role programs"]["detail"]
+    assert check_map["experiment_progress.json"]["status"] == "OK"
+    assert check_map["events.jsonl"]["status"] == "OK"
+    assert check_map["Python >= 3.10"]["status"] == "OK"
 
 
 def test_doctor_missing_scout_program_fails_role_programs(valid_repo):
