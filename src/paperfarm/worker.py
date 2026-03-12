@@ -351,6 +351,7 @@ class WorkerManager:
                 notify_finished = True
                 stop_after_finalize = False
                 run_started_at = None
+                _token_metrics = None
                 try:
                     if not self._wait_until_unpaused():
                         applied = self.idea_pool.update_status(idea["id"], "pending", claim_token=claim_token or None)
@@ -402,7 +403,6 @@ class WorkerManager:
                     if gpu_env:
                         self.on_output(f"[{wid}] Using GPU env: {gpu_env}")
 
-                    _token_metrics = None
                     workspace = (
                         self._plugins.workspace_isolation.acquire(wid, str(idea["id"]))
                         if self._plugins.workspace_isolation is not None
@@ -609,6 +609,7 @@ class WorkerManager:
                         )
                     run_code = 1
                 finally:
+                    latest_idea = dict(idea)
                     try:
                         if self._plugins.failure_memory is not None and memory_context is not None:
                             self._plugins.failure_memory.record(memory_context, run_code)
@@ -623,19 +624,26 @@ class WorkerManager:
                             self.stop()
                         if workdir != self.repo_path:
                             self.on_output(f"[{wid}] Worktree cleaned up")
-                    latest_idea = next(
-                        (item for item in self.idea_pool.all_ideas() if item.get("id") == idea.get("id")),
-                        dict(idea),
-                    )
-                    latest_idea["exit_code"] = run_code
-                    latest_idea["worker_id"] = wid
-                    if stop_after_finalize:
-                        latest_idea["retry_requested"] = True
-                    if _token_metrics is not None:
-                        latest_idea["_token_metrics"] = {
-                            "tokens_input": _token_metrics.tokens_input,
-                            "tokens_output": _token_metrics.tokens_output,
-                        }
+                    try:
+                        latest_idea = next(
+                            (item for item in self.idea_pool.all_ideas() if item.get("id") == idea.get("id")),
+                            dict(idea),
+                        )
+                        latest_idea["exit_code"] = run_code
+                        latest_idea["worker_id"] = wid
+                        if stop_after_finalize:
+                            latest_idea["retry_requested"] = True
+                        if _token_metrics is not None:
+                            latest_idea["_token_metrics"] = {
+                                "tokens_input": _token_metrics.tokens_input,
+                                "tokens_output": _token_metrics.tokens_output,
+                            }
+                    finally:
+                        try:
+                            if self._plugins.gpu_allocator is not None and allocation is not None:
+                                self._plugins.gpu_allocator.release(allocation)
+                        finally:
+                            self._release_claim_slot()
                     if notify_finished and self._on_experiment_finished is not None:
                         try:
                             should_stop = bool(self._on_experiment_finished(latest_idea))
@@ -646,9 +654,6 @@ class WorkerManager:
                             self.stop()
                     if stop_after_finalize:
                         self.stop()
-                    if self._plugins.gpu_allocator is not None and allocation is not None:
-                        self._plugins.gpu_allocator.release(allocation)
-                    self._release_claim_slot()
         except Exception as exc:
             self._record_fatal_error()
             self.on_output(f"[{wid}] Fatal worker error: {exc}")

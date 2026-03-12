@@ -559,6 +559,90 @@ def test_worker_manager_marks_claimed_item_skipped_when_setup_raises():
         assert summary["done"] + summary["skipped"] + summary["running"] < 19
 
 
+def test_worker_manager_releases_gpu_when_setup_raises_before_agent_run():
+    class TrackingAllocator:
+        default_memory_per_worker_mb = 4096
+
+        def __init__(self) -> None:
+            self.released: list[GPUAllocation] = []
+
+        def worker_slots(self, max_workers: int):
+            return [None] * max(max_workers, 1)
+
+        def select_claimable_idea(self, pending_ideas: list[dict]) -> str | None:
+            return str(pending_ideas[0]["id"]) if pending_ideas else None
+
+        def allocate_for_idea(self, worker_id: str, idea: dict, preferred=None):
+            return GPUAllocation(
+                host="local",
+                device=0,
+                reservations=[
+                    {
+                        "host": "local",
+                        "device": 0,
+                        "id": "res-test",
+                        "tag": worker_id,
+                        "memory_mb": 4096,
+                        "gpu_count": 1,
+                    }
+                ],
+                resource_request={"gpu_count": 1, "gpu_mem_mb": 4096},
+            )
+
+        def release(self, allocation: GPUAllocation) -> None:
+            self.released.append(allocation)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        idea_pool = _make_idea_pool(
+            research,
+            [
+                {
+                    "id": "idea-001",
+                    "description": "Setup crash with GPU allocation",
+                    "status": "pending",
+                    "priority": 1,
+                    "claimed_by": None,
+                    "assigned_experiment": None,
+                    "result": None,
+                    "source": "graph",
+                    "category": "graph",
+                    "gpu_hint": 1,
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            ],
+        )
+
+        failing_memory = MagicMock(spec=FailureMemoryPlugin)
+        failing_memory.prepare.side_effect = RuntimeError("prepare failed")
+        allocator = TrackingAllocator()
+        output_lines: list[str] = []
+
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=lambda: MagicMock(),
+            max_workers=1,
+            on_output=output_lines.append,
+            runtime_plugins=WorkerRuntimePlugins(
+                gpu_allocator=allocator,
+                failure_memory=failing_memory,
+            ),
+        )
+
+        wm.start()
+        wm.join(timeout=5)
+
+        summary = idea_pool.summary()
+        assert summary["skipped"] == 1
+        assert wm.fatal_errors == 0
+        assert len(allocator.released) == 1
+        assert not any("Fatal worker error" in line for line in output_lines)
+
+
 def test_worker_manager_stops_when_workspace_isolation_fails():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
