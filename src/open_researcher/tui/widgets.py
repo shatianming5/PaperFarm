@@ -221,12 +221,27 @@ class SessionChromeBar(Static):
             f"[{C_ERROR}]crash {chrome.crash}[/]  "
             f"[{C_PRIMARY}]runnable {chrome.frontier_runnable}[/]"
         )
+        token_parts = []
+        if chrome.tokens_used > 0:
+            if chrome.token_budget > 0:
+                ratio = chrome.tokens_used / chrome.token_budget
+                token_parts.append(
+                    f"[{C_DIM}]tokens[/] [{C_TEXT}]{chrome.tokens_used:,}[/] / "
+                    f"[{C_TEXT}]{chrome.token_budget:,}[/] ({ratio:.1%})"
+                )
+            else:
+                token_parts.append(f"[{C_DIM}]tokens[/] [{C_TEXT}]{chrome.tokens_used:,}[/]")
+            if chrome.estimated_cost > 0:
+                token_parts.append(f"[{C_DIM}]est. cost[/] [{C_SECONDARY}]${chrome.estimated_cost:.2f}[/]")
+        token_line = "  ".join(token_parts) if token_parts else ""
         lines = [
             f"[bold {C_TEXT}]Research Command Center[/]  {phase_line}  {control_suffix}",
             config_line,
             metric_line,
             volume_line,
         ]
+        if token_line:
+            lines.append(token_line)
         if chrome.config_error:
             lines.append(f"[{C_CORAL}]Config:[/] {escape(chrome.config_error)}")
         if chrome.graph_error:

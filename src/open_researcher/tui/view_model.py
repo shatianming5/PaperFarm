@@ -71,6 +71,9 @@ class SessionChrome:
     frontier_runnable: int
     config_error: str = ""
     graph_error: str = ""
+    tokens_used: int = 0
+    token_budget: int = 0
+    estimated_cost: float = 0.0
 
 
 @dataclass(slots=True)
@@ -515,6 +518,13 @@ def build_dashboard_state(
         if isinstance(row, dict)
     }
 
+    from open_researcher.config import load_config
+    from open_researcher.token_tracking import load_ledger, estimate_cost as _estimate_cost
+
+    _cfg = load_config(research_dir)
+    _ledger = load_ledger(research_dir / "token_ledger.json")
+    _ledger_cost = _estimate_cost(_ledger.cumulative) if _ledger.cumulative.tokens_total > 0 else 0.0
+
     session = SessionChrome(
         branch=str(state.get("branch", "unknown") or "unknown"),
         protocol=str(state.get("protocol", "") or "research-v1"),
@@ -535,6 +545,9 @@ def build_dashboard_state(
         frontier_runnable=_safe_int(graph_state.get("frontier_runnable", 0)),
         config_error=str(state.get("config_error", "") or ""),
         graph_error=str(graph_state.get("error", "") or ""),
+        tokens_used=_ledger.cumulative.tokens_total,
+        token_budget=_cfg.token_budget,
+        estimated_cost=_ledger_cost,
     )
 
     graph = GraphSummary(
