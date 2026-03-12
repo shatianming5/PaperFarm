@@ -87,6 +87,7 @@ def _dispatch_workflow(
     tag: str | None = None,
     goal: str | None = None,
     max_experiments: int = 0,
+    token_budget: int = 0,
     dry_run: bool = False,
     force_bootstrap: bool = False,
 ) -> None:
@@ -135,6 +136,7 @@ def _dispatch_workflow(
                     repo_path=repo_path,
                     goal=goal or "",
                     max_experiments=max_experiments,
+                    token_budget=token_budget,
                     agent_name=selection.primary_agent_name,
                     tag=tag,
                     workers=selection.workers,
@@ -156,6 +158,7 @@ def _dispatch_workflow(
                 workers=selection.workers,
                 goal=goal,
                 max_experiments=max_experiments,
+                token_budget=token_budget,
             )
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
@@ -180,6 +183,7 @@ def _dispatch_workflow(
                 repo_path=repo_path,
                 agent_name=selection.primary_agent_name,
                 max_experiments=max_experiments,
+                token_budget=token_budget,
                 workers=selection.workers,
             )
         except ValueError as exc:
@@ -197,6 +201,7 @@ def _dispatch_workflow(
                 dry_run=dry_run,
                 workers=selection.workers,
                 max_experiments=max_experiments,
+                token_budget=token_budget,
             )
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
@@ -278,6 +283,7 @@ def run(
     ),
     goal: str = typer.Option(None, "--goal", help="Research goal for bootstrap/headless mode."),
     max_experiments: int = typer.Option(0, "--max-experiments", help="Stop after N experiments (0 = unlimited)."),
+    token_budget: int = typer.Option(0, "--token-budget", help="Stop/warn after N total tokens (0 = unlimited)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the command without executing."),
 ):
     """Primary workflow command: bootstrap if needed, otherwise run the existing workflow."""
@@ -290,6 +296,7 @@ def run(
         workers=workers,
         goal=goal,
         max_experiments=max_experiments,
+        token_budget=token_budget,
         dry_run=dry_run,
     )
 
@@ -307,6 +314,7 @@ def start(
     ),
     goal: str = typer.Option(None, "--goal", help="Research goal (required for `--mode headless`)."),
     max_experiments: int = typer.Option(0, "--max-experiments", help="Stop after N experiments (0 = unlimited)."),
+    token_budget: int = typer.Option(0, "--token-budget", help="Stop/warn after N total tokens (0 = unlimited)."),
 ):
     """Legacy alias for bootstrap mode; prefer `run` for both new and existing workflows."""
     _dispatch_workflow(
@@ -318,6 +326,7 @@ def start(
         workers=workers,
         goal=goal,
         max_experiments=max_experiments,
+        token_budget=token_budget,
         force_bootstrap=True,
     )
 

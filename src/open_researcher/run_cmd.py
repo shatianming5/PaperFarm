@@ -121,11 +121,13 @@ def _build_parallel_runner(
     )
 
 
-def _load_runtime_config(research: Path, *, workers: int | None, max_experiments: int = 0):
+def _load_runtime_config(research: Path, *, workers: int | None, max_experiments: int = 0, token_budget: int = 0):
     cfg = apply_worker_override(load_config(research, strict=True), workers)
     require_supported_protocol(cfg)
     if max_experiments > 0:
         cfg.max_experiments = max_experiments
+    if token_budget > 0:
+        cfg.token_budget = token_budget
     return cfg
 
 
@@ -197,6 +199,7 @@ def do_run(
     dry_run: bool,
     workers: int | None = None,
     max_experiments: int = 0,
+    token_budget: int = 0,
 ) -> int:
     """Continue an existing research-v1 workflow in the TUI."""
     research = repo_path / ".research"
@@ -204,7 +207,7 @@ def do_run(
         console.print("[red]Error:[/red] .research/ not found. Run 'open-researcher init' first.")
         raise SystemExit(1)
 
-    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments)
+    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
     manager_agent, critic_agent, exp_agent = _resolve_research_agents(
@@ -296,6 +299,7 @@ def do_start(
     workers: int | None = None,
     goal: str | None = None,
     max_experiments: int = 0,
+    token_budget: int = 0,
 ) -> int:
     """Bootstrap a research-v1 workflow: init -> Scout -> Review -> runtime."""
     from open_researcher.tui.modals import GoalInputModal
@@ -304,7 +308,7 @@ def do_start(
     if tag is None:
         tag = date.today().strftime("%b%d").lower()
     research = do_start_init(repo_path, tag=tag)
-    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments)
+    cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
     initialize_graph_runtime_state(research, cfg)
     ensure_bootstrap_state(research / "bootstrap_state.json")
 
@@ -343,7 +347,7 @@ def do_start(
                     except RuntimeError:
                         pass
                     return
-                refreshed_cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments)
+                refreshed_cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
                 initialize_graph_runtime_state(research, refreshed_cfg)
                 ensure_bootstrap_state(research / "bootstrap_state.json")
                 cfg_ref["cfg"] = refreshed_cfg
