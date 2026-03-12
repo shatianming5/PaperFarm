@@ -69,6 +69,79 @@ def _check_opencode_cli() -> dict:
     }
 
 
+def _check_gpu_info() -> list[dict]:
+    """Detect GPU hardware via nvidia-smi and report driver, device count, and per-GPU details."""
+    results: list[dict] = []
+
+    # Check nvidia-smi binary
+    if not shutil.which("nvidia-smi"):
+        results.append({"check": "GPU driver", "status": "WARN", "detail": "nvidia-smi not found on PATH"})
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "Cannot detect GPUs without nvidia-smi"})
+        return results
+
+    # Query driver version
+    try:
+        driver_result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        results.append({"check": "GPU driver", "status": "WARN", "detail": f"nvidia-smi failed: {exc}"})
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "Cannot detect GPUs"})
+        return results
+
+    if driver_result.returncode != 0:
+        detail = driver_result.stderr.strip() or driver_result.stdout.strip() or "unknown error"
+        results.append({"check": "GPU driver", "status": "WARN", "detail": f"nvidia-smi failed: {detail}"})
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "Cannot detect GPUs"})
+        return results
+
+    driver_version = driver_result.stdout.strip().splitlines()[0].strip() if driver_result.stdout.strip() else "unknown"
+    results.append({"check": "GPU driver", "status": "OK", "detail": f"NVIDIA driver {driver_version}"})
+
+    # Query per-GPU info
+    try:
+        gpu_result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,memory.free,utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "GPU query timed out"})
+        return results
+
+    if gpu_result.returncode != 0 or not gpu_result.stdout.strip():
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "No GPUs detected"})
+        return results
+
+    gpu_lines = [line.strip() for line in gpu_result.stdout.strip().splitlines() if line.strip()]
+    gpu_summaries = []
+    for line in gpu_lines:
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+        try:
+            idx, name, mem_total, mem_free, util = parts[0], parts[1], parts[2], parts[3], parts[4]
+            gpu_summaries.append(f"GPU {idx}: {name} ({mem_free}/{mem_total} MiB free, {util}% util)")
+        except (ValueError, IndexError):
+            continue
+
+    if gpu_summaries:
+        detail = f"{len(gpu_summaries)} GPU(s) — " + "; ".join(gpu_summaries)
+        results.append({"check": "GPU devices", "status": "OK", "detail": detail})
+    else:
+        results.append({"check": "GPU devices", "status": "WARN", "detail": "No GPUs detected"})
+
+    return results
+
+
 def run_doctor(repo_path: Path) -> list[dict]:
     """Run health checks. Returns list of {check, status, detail}."""
     results: list[dict] = []
@@ -350,6 +423,9 @@ def run_doctor(repo_path: Path) -> list[dict]:
         results.append({"check": "Python >= 3.10", "status": "OK", "detail": f"{major}.{minor}"})
     else:
         results.append({"check": "Python >= 3.10", "status": "FAIL", "detail": f"{major}.{minor} (need >= 3.10)"})
+
+    # 16. GPU information
+    results.extend(_check_gpu_info())
 
     return results
 
