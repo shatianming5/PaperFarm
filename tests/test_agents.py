@@ -39,6 +39,7 @@ def test_list_agents():
     assert "codex" in agents
     assert "aider" in agents
     assert "opencode" in agents
+    assert "gemini-cli" in agents
 
 
 def test_get_agent_known():
@@ -315,3 +316,80 @@ def test_detect_agent_with_configs(monkeypatch):
     agent = detect_agent(configs={"claude-code": {"model": "custom-model"}})
     assert agent is not None
     assert agent._config.get("model") == "custom-model"
+
+
+# ---- Gemini adapter tests ----
+
+
+def test_gemini_build_command():
+    from open_researcher.agents.gemini import GeminiAdapter
+
+    agent = GeminiAdapter()
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert cmd == ["gemini", "-p", "/tmp/program.md", "--model", "gemini-3.1-pro"]
+
+
+def test_gemini_build_command_with_config():
+    from open_researcher.agents.gemini import GeminiAdapter
+
+    agent = GeminiAdapter(config={"model": "gemini-2.5-flash", "sandbox": "auto", "extra_flags": ["--debug"]})
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert cmd == [
+        "gemini",
+        "-p",
+        "/tmp/program.md",
+        "--model",
+        "gemini-2.5-flash",
+        "--sandbox",
+        "auto",
+        "--debug",
+    ]
+
+
+def test_gemini_run_success(tmp_path, monkeypatch):
+    from open_researcher.agents.gemini import GeminiAdapter
+
+    research = tmp_path / ".research"
+    research.mkdir()
+    (research / "program.md").write_text("test prompt", encoding="utf-8")
+
+    agent = GeminiAdapter(config={"model": "gemini-3.1-pro"})
+    calls = {}
+
+    def fake_run_process(cmd, workdir, on_output=None, stdin_text=None, env=None):
+        calls["cmd"] = cmd
+        calls["workdir"] = workdir
+        calls["env"] = env
+        return 0
+
+    monkeypatch.setattr(agent, "_run_process", fake_run_process)
+
+    result = agent.run(tmp_path, env={"GEMINI_API_KEY": "test-key"})
+
+    assert result == 0
+    assert calls["workdir"] == tmp_path
+    assert calls["env"] == {"GEMINI_API_KEY": "test-key"}
+    assert calls["cmd"] == ["gemini", "-p", "test prompt", "--model", "gemini-3.1-pro"]
+
+
+def test_gemini_run_missing_program_file(tmp_path):
+    from open_researcher.agents.gemini import GeminiAdapter
+
+    agent = GeminiAdapter()
+    output = []
+
+    result = agent.run(tmp_path, on_output=output.append)
+
+    assert result == 1
+    assert output == [f"[gemini] program file not found: {tmp_path / '.research' / 'program.md'}"]
+
+
+def test_gemini_default_model():
+    from open_researcher.agents.gemini import GeminiAdapter
+
+    agent = GeminiAdapter()
+    cmd = agent.build_command(Path("/tmp/program.md"), Path("/tmp/work"))
+    assert "--model" in cmd
+    assert "gemini-3.1-pro" in cmd
+    # no --sandbox when not configured
+    assert "--sandbox" not in cmd
