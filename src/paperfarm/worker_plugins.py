@@ -164,6 +164,11 @@ class GPUAllocatorPlugin:
             return None
         if reservations is None:
             return None
+        hosts = {str(item.get("host", "")).strip() for item in reservations if str(item.get("host", "")).strip()}
+        if len(hosts) > 1:
+            self.manager.release_reservations(reservations)
+            logger.debug("Rejected cross-host GPU reservation for worker %s: %s", worker_id, sorted(hosts))
+            return None
         visible_devices = ",".join(str(item.get("device")) for item in reservations)
         host = str(reservations[0].get("host", "local")).strip() if reservations else None
         device = int(reservations[0].get("device", 0)) if reservations else None

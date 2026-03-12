@@ -860,7 +860,16 @@ class ResearchGraphStore:
             return {"ideas": ideas, "items": trace_items}
 
         _data, pool_payload = locked_update_json(self.path, self._lock, _do, default=_default_graph)
-        atomic_write_json(pool_path, {"ideas": pool_payload["ideas"]})
+        pool_lock = FileLock(str(pool_path) + ".lock")
+
+        def _replace_pool(data):
+            existing = data if isinstance(data, dict) else {"ideas": []}
+            preserved = {key: value for key, value in existing.items() if key != "ideas"}
+            preserved["ideas"] = pool_payload["ideas"]
+            data.clear()
+            data.update(preserved)
+
+        locked_update_json(pool_path, pool_lock, _replace_pool, default=lambda: {"ideas": []})
         return {"frontier_items": len(pool_payload["ideas"]), "items": pool_payload["items"]}
 
     def apply_history_policy(self, memory_payload: dict) -> dict:
@@ -1243,12 +1252,13 @@ class ResearchGraphStore:
         for row in anchor_rows:
             frontier_id = str(row.get("id", "")).strip()
             if frontier_id == current_frontier_id:
-                return False
+                continue
             if str(row.get("claim_state", "")).strip() == "promoted":
-                return False
+                continue
             if str(row.get("review_reason_code", "")).strip() == "strong_evidence":
-                return False
-        return True
+                continue
+            return True
+        return False
 
     def _best_result_value(
         self,

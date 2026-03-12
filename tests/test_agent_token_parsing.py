@@ -1,5 +1,4 @@
 from paperfarm.agents.base import AgentAdapter
-from pathlib import Path
 
 
 class StubAdapter(AgentAdapter):

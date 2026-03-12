@@ -72,6 +72,8 @@ class WorkerManager:
         self._fatal_errors = 0
         self._fatal_lock = threading.Lock()
         self._backfill_threshold_minutes = max(int(backfill_threshold_minutes or 0), 1)
+        self._resource_deadlocks = 0
+        self._resource_deadlock_lock = threading.Lock()
 
     def start(self) -> None:
         """Start worker threads based on available GPUs."""
@@ -224,6 +226,15 @@ class WorkerManager:
         with self._fatal_lock:
             self._fatal_errors += 1
 
+    @property
+    def resource_deadlocks(self) -> int:
+        with self._resource_deadlock_lock:
+            return self._resource_deadlocks
+
+    def _record_resource_deadlock(self) -> None:
+        with self._resource_deadlock_lock:
+            self._resource_deadlocks += 1
+
     def _wait_until_unpaused(self) -> bool:
         while not self._should_stop():
             ctrl = read_control(self.research_dir / "control.json")
@@ -236,14 +247,14 @@ class WorkerManager:
         allocator = self._plugins.gpu_allocator
         if allocator is None:
             idea = self.idea_pool.claim_idea(worker_name)
-            return idea, None, False
+            return idea, None, None
 
         pending = self.idea_pool.pending_ideas(
             default_gpu_mem_mb=allocator.default_memory_per_worker_mb,
             backfill_threshold_minutes=self._backfill_threshold_minutes,
         )
         if not pending:
-            return None, None, False
+            return None, None, None
 
         preferred_id = allocator.select_claimable_idea(pending)
         if preferred_id:
@@ -259,11 +270,16 @@ class WorkerManager:
                 continue
             allocation = allocator.allocate_for_idea(worker_name, claimed, preferred=slot_hint)
             if allocation is not None:
-                return claimed, allocation, False
+                return claimed, allocation, None
             blocked = True
             claim_token = str(claimed.get("claim_token", "")).strip()
             self.idea_pool.update_status(claimed["id"], "pending", claim_token=claim_token or None)
-        return None, None, blocked
+        if blocked:
+            summary = self.idea_pool.summary()
+            if int(summary.get("running", 0) or 0) <= 0:
+                return None, None, "resource_deadlock"
+            return None, None, "waiting_resources"
+        return None, None, None
 
     @staticmethod
     def _resource_observation(idea: dict, allocation, *, duration_seconds: float | None) -> dict:
@@ -298,10 +314,10 @@ class WorkerManager:
                 if not self._reserve_claim_slot():
                     self.on_output(f"[{wid}] Claim budget exhausted, stopping")
                     break
-                idea, allocation, resource_blocked = self._claim_next_runnable_idea(wid, gpu)
+                idea, allocation, resource_state = self._claim_next_runnable_idea(wid, gpu)
                 if not idea:
                     self._release_claim_slot()
-                    if resource_blocked:
+                    if resource_state == "waiting_resources":
                         self._activity.update_worker(
                             "experiment_agent",
                             wid,
@@ -311,6 +327,17 @@ class WorkerManager:
                         self.on_output(f"[{wid}] No runnable ideas fit current resources, waiting")
                         time.sleep(0.5)
                         continue
+                    if resource_state == "resource_deadlock":
+                        self._activity.update_worker(
+                            "experiment_agent",
+                            wid,
+                            status="idle",
+                            idea="",
+                        )
+                        self._record_resource_deadlock()
+                        self.on_output(f"[{wid}] Pending ideas are unschedulable with current resources, stopping batch")
+                        self.stop()
+                        break
                     self.on_output(f"[{wid}] No more pending ideas, stopping")
                     break
 
@@ -465,7 +492,9 @@ class WorkerManager:
                                             idea,
                                             allocation,
                                             duration_seconds=(
-                                                time.monotonic() - run_started_at if run_started_at is not None else None
+                                                time.monotonic() - run_started_at
+                                                if run_started_at is not None
+                                                else None
                                             ),
                                         ),
                                     )
@@ -569,7 +598,9 @@ class WorkerManager:
                         resource_observation=self._resource_observation(
                             idea,
                             allocation,
-                            duration_seconds=(time.monotonic() - run_started_at if run_started_at is not None else None),
+                            duration_seconds=(
+                                time.monotonic() - run_started_at if run_started_at is not None else None
+                            ),
                         ),
                     )
                     if not applied:

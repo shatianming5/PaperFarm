@@ -66,6 +66,8 @@ class ActivityMonitor:
                 entry["detail"] = f"{len(active_workers)} active worker(s)"
                 entry["active_workers"] = len(active_workers)
             else:
+                entry["status"] = "idle"
+                entry["detail"] = "0 active worker(s)"
                 entry["active_workers"] = 0
             entry["workers"] = workers
             entry["updated_at"] = datetime.now(timezone.utc).isoformat()

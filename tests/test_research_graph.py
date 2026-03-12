@@ -58,6 +58,45 @@ def test_graph_store_syncs_executable_frontier_to_idea_pool(tmp_path):
     assert data["ideas"][0]["selection_reason_code"] == "initial_frontier"
 
 
+def test_graph_store_sync_preserves_claim_token_sequence(tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    graph_path = research / "research_graph.json"
+    pool_path = research / "idea_pool.json"
+    pool_path.write_text(json.dumps({"ideas": [], "claim_token_seq": 7, "custom": {"keep": True}}))
+
+    store = ResearchGraphStore(graph_path)
+    store.ensure_exists()
+    payload = store.read()
+    payload["hypotheses"] = [{"id": "hyp-001", "summary": "Benchmark parser throughput"}]
+    payload["experiment_specs"] = [
+        {
+            "id": "spec-001",
+            "hypothesis_id": "hyp-001",
+            "summary": "Benchmark parser throughput",
+        }
+    ]
+    payload["frontier"] = [
+        {
+            "id": "frontier-001",
+            "hypothesis_id": "hyp-001",
+            "experiment_spec_id": "spec-001",
+            "description": "Benchmark parser throughput",
+            "priority": 1,
+            "status": "approved",
+            "claim_state": "candidate",
+        }
+    ]
+    graph_path.write_text(json.dumps(payload, indent=2))
+
+    store.sync_idea_pool(pool_path)
+
+    data = json.loads(pool_path.read_text(encoding="utf-8"))
+    assert data["claim_token_seq"] == 7
+    assert data["custom"] == {"keep": True}
+    assert len(data["ideas"]) == 1
+
+
 def test_graph_store_absorbs_completed_idea_into_evidence(tmp_path):
     research = tmp_path / ".research"
     research.mkdir()
@@ -468,6 +507,34 @@ def test_graph_store_marks_new_best_for_repro_request(tmp_path):
     assert result["evidence_created"] == 1
     assert graph["frontier"][0]["repro_required"] is True
     assert graph["frontier"][0]["status"] == "needs_post_review"
+
+
+def test_anchor_pending_requires_all_other_anchors_to_be_resolved(tmp_path):
+    graph_path = tmp_path / "research_graph.json"
+    store = ResearchGraphStore(graph_path)
+    frontier = [
+        {
+            "id": "frontier-anchor-1",
+            "anchor_role": "anchor",
+            "claim_state": "promoted",
+            "review_reason_code": "strong_evidence",
+        },
+        {
+            "id": "frontier-anchor-2",
+            "anchor_role": "anchor",
+            "claim_state": "candidate",
+            "review_reason_code": "unspecified",
+        },
+        {
+            "id": "frontier-branch",
+            "anchor_role": "",
+            "claim_state": "candidate",
+            "review_reason_code": "unspecified",
+        },
+    ]
+
+    assert store._anchor_frontier_pending(frontier, current_frontier_id="frontier-branch") is True
+    assert store._anchor_frontier_pending(frontier, current_frontier_id="frontier-anchor-2") is False
 
 
 def test_graph_store_normalizes_non_numeric_priority_without_crashing(tmp_path):

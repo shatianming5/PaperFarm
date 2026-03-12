@@ -222,7 +222,6 @@ If a command cannot be resolved safely, `run` stops before the review/runtime st
 | [Codex CLI](https://github.com/openai/codex) | `--agent codex` | Supported |
 | [Aider](https://github.com/paul-gauthier/aider) | `--agent aider` | Supported |
 | [OpenCode](https://github.com/opencode-ai/opencode) | `--agent opencode` | Supported |
-| [Kimi CLI](https://moonshotai.github.io/kimi-cli/en/reference/kimi-command.html) | `--agent kimi-cli` | Supported |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `--agent gemini-cli` | Supported |
 
 Auto-detection: If you don't specify `--agent`, PaperFarm finds the first installed one.
@@ -249,10 +248,6 @@ agents:
     model: "openai/gpt-5"
     agent: "builder"
     extra_flags: ["--share"]
-  kimi-cli:
-    model: ""                       # optional model override
-    agent: "okabe"                  # optional built-in agent profile
-    extra_flags: ["--thinking"]
   gemini-cli:
     model: "gemini-3.1-pro"          # override default model
     sandbox: ""                       # optional sandbox mode
@@ -529,7 +524,6 @@ agents:                       # per-agent overrides (optional)
 | `codex.py` | Codex CLI adapter |
 | `aider.py` | Aider adapter |
 | `opencode.py` | OpenCode adapter |
-| `kimi.py` | Kimi CLI adapter |
 | `gemini.py` | Gemini CLI adapter |
 
 </details>

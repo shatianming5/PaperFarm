@@ -85,6 +85,16 @@ def test_remove_worker(tmp_path):
     assert len(data["workers"]) == 0
 
 
+def test_update_worker_sets_agent_idle_when_last_worker_idles(tmp_path):
+    am = ActivityMonitor(tmp_path)
+    am.update_worker("experiment_agent", "w-001", status="running", idea="idea-001", gpus=[0])
+    am.update_worker("experiment_agent", "w-001", status="idle", idea="", gpus=[])
+    data = am.get("experiment_agent")
+    assert data["status"] == "idle"
+    assert data["detail"] == "0 active worker(s)"
+    assert data["active_workers"] == 0
+
+
 def test_concurrent_updates(tmp_path):
     """10 threads updating different keys — verify all 10 keys present."""
     am = ActivityMonitor(tmp_path)

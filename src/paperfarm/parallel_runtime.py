@@ -210,11 +210,14 @@ def run_parallel_experiment_batch(
     after = idea_pool.summary()
     fatal_errors = wm.fatal_errors
     running_after = int(after.get("running", 0) or 0)
+    resource_deadlocks = int(wm.resource_deadlocks or 0)
     return {
         "experiments_completed": batch_finished,
-        "exit_code": 1 if failed_runs > 0 or fatal_errors > 0 or running_after > 0 else 0,
+        "exit_code": 1 if failed_runs > 0 or fatal_errors > 0 or running_after > 0 or resource_deadlocks > 0 else 0,
         "failed_runs": failed_runs,
         "started_runs": batch_started,
         "fatal_errors": fatal_errors,
         "running_after": running_after,
+        "resource_deadlocks": resource_deadlocks,
+        "stop_reason": "resource_deadlock" if resource_deadlocks > 0 else None,
     }

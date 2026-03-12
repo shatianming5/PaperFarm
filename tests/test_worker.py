@@ -14,6 +14,7 @@ from paperfarm.idea_pool import IdeaPool
 from paperfarm.worker import WorkerManager
 from paperfarm.worker_plugins import (
     FailureMemoryPlugin,
+    GPUAllocation,
     WorkerRuntimePlugins,
     WorkspaceIsolationError,
 )
@@ -167,6 +168,57 @@ def test_worker_manager_stops_on_no_ideas():
 
         # Workers should have logged "no more pending ideas"
         assert any("No more pending ideas" in line for line in output_lines)
+
+
+def test_worker_manager_stops_on_unschedulable_pending_idea():
+    class NeverFitAllocator:
+        default_memory_per_worker_mb = 4096
+
+        def worker_slots(self, max_workers: int):
+            return [None] * max_workers
+
+        def select_claimable_idea(self, pending_ideas: list[dict]) -> str | None:
+            return str(pending_ideas[0]["id"]) if pending_ideas else None
+
+        def allocate_for_idea(self, worker_id: str, idea: dict, preferred=None):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        research = _make_research_dir(tmp_path)
+        ideas = [
+            {
+                "id": "idea-001",
+                "description": "Needs unavailable resource",
+                "status": "pending",
+                "priority": 1,
+                "result": None,
+                "source": "graph",
+                "category": "graph",
+                "gpu_hint": 1,
+                "created_at": "2026-01-01T00:00:00",
+            }
+        ]
+        idea_pool = _make_idea_pool(research, ideas)
+        output_lines = []
+        wm = WorkerManager(
+            repo_path=tmp_path,
+            research_dir=research,
+            gpu_manager=None,
+            idea_pool=idea_pool,
+            agent_factory=MagicMock(),
+            max_workers=1,
+            on_output=output_lines.append,
+            runtime_plugins=WorkerRuntimePlugins(gpu_allocator=NeverFitAllocator()),
+        )
+
+        wm.start()
+        wm.join(timeout=5)
+
+        assert all(not worker.is_alive() for worker in wm._workers)
+        assert wm.resource_deadlocks == 1
+        assert idea_pool.summary()["pending"] == 1
+        assert any("unschedulable" in line for line in output_lines)
 
 
 def test_worker_manager_handles_agent_failure():

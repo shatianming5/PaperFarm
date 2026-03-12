@@ -215,6 +215,21 @@ def test_run_existing_research_headless_routes_to_continue_flow():
         assert kwargs["workers"] == 2
 
 
+def test_run_existing_research_headless_forwards_token_budget():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        Path(".research").mkdir()
+        (Path(".research") / "config.yaml").write_text("research:\n  protocol: research-v1\n")
+        from unittest.mock import patch
+
+        with patch("paperfarm.headless.do_run_headless", return_value=0) as mock_headless:
+            result = runner.invoke(app, ["run", "--mode", "headless", "--token-budget", "1234"])
+
+        assert result.exit_code == 0
+        kwargs = mock_headless.call_args.kwargs
+        assert kwargs["token_budget"] == 1234
+
+
 def test_run_existing_research_headless_dry_run_does_not_launch_runtime():
     with runner.isolated_filesystem():
         Path(".git").mkdir()
@@ -282,6 +297,22 @@ def test_start_mode_headless_routes_to_headless_entrypoint():
         mock_headless.assert_called_once()
         kwargs = mock_headless.call_args.kwargs
         assert kwargs["workers"] == 2
+
+
+def test_start_mode_headless_forwards_token_budget():
+    with runner.isolated_filesystem():
+        Path(".git").mkdir()
+        from unittest.mock import patch
+
+        with patch("paperfarm.headless.do_start_headless", return_value=None) as mock_headless:
+            result = runner.invoke(
+                app,
+                ["start", "--mode", "headless", "--goal", "test goal", "--token-budget", "4321"],
+            )
+
+        assert result.exit_code == 0
+        kwargs = mock_headless.call_args.kwargs
+        assert kwargs["token_budget"] == 4321
 
 
 def test_start_deprecated_headless_flag_routes_to_headless_entrypoint():

@@ -150,6 +150,7 @@ def do_run_headless(
     repo_path: Path,
     *,
     max_experiments: int = 0,
+    token_budget: int = 0,
     agent_name: str | None = None,
     workers: int | None = None,
     stream=None,
@@ -165,6 +166,8 @@ def do_run_headless(
     ensure_bootstrap_state(research / "bootstrap_state.json")
     if max_experiments > 0:
         cfg.max_experiments = max_experiments
+    if token_budget > 0:
+        cfg.token_budget = token_budget
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
@@ -226,6 +229,7 @@ def do_start_headless(
     repo_path: Path,
     goal: str,
     max_experiments: int = 0,
+    token_budget: int = 0,
     agent_name: str | None = None,
     tag: str | None = None,
     workers: int | None = None,
@@ -247,6 +251,8 @@ def do_start_headless(
 
     if max_experiments > 0:
         cfg.max_experiments = max_experiments
+    if token_budget > 0:
+        cfg.token_budget = token_budget
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
