@@ -10,16 +10,14 @@ from jinja2 import Environment, PackageLoader
 from open_researcher.config import ResearchConfig
 from open_researcher.research_graph import ResearchGraphStore
 from open_researcher.research_memory import ResearchMemoryStore
-from open_researcher.role_programs import ensure_internal_role_programs
+from open_researcher.role_programs import ensure_internal_role_programs, ensure_legacy_role_programs
 
 
 def ensure_graph_protocol_artifacts(research_dir: Path) -> None:
     """Backfill research-v1 files for existing research directories."""
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
-    scout_path = research_dir / "scout_program.md"
-    if not scout_path.exists():
-        scout_path.write_text(env.get_template("scout_program.md.j2").render({}))
     ensure_internal_role_programs(research_dir, env=env)
+    ensure_legacy_role_programs(research_dir, ["scout"])
 
     progress_path = research_dir / "experiment_progress.json"
     if not progress_path.exists():

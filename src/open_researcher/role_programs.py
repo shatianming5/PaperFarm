@@ -80,6 +80,18 @@ def ensure_internal_role_programs(
         internal_path.write_text(content, encoding="utf-8")
 
 
+def ensure_legacy_role_programs(research_dir: Path, roles: list[RoleProgram]) -> None:
+    """Ensure legacy role files exist by copying internal role files when available."""
+    for role in roles:
+        legacy_path = research_dir / legacy_role_program_file(role)
+        if legacy_path.exists():
+            continue
+        internal_path = research_dir / internal_role_program_file(role)
+        if not internal_path.exists():
+            continue
+        legacy_path.write_text(internal_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 def missing_role_programs(research_dir: Path) -> list[RoleProgram]:
     """Return roles missing both internal and legacy program files."""
     missing: list[RoleProgram] = []
