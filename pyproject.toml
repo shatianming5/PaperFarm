@@ -50,11 +50,12 @@ dev = [
 
 [project.scripts]
 open-researcher = "open_researcher.cli:app"
+PaperFarm = "open_researcher.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/open-researcher/open-researcher"
-Repository = "https://github.com/open-researcher/open-researcher"
-Issues = "https://github.com/open-researcher/open-researcher/issues"
+Homepage = "https://github.com/shatianming5/PaperFarm"
+Repository = "https://github.com/shatianming5/PaperFarm"
+Issues = "https://github.com/shatianming5/PaperFarm/issues"
 
 [tool.ruff]
 target-version = "py310"

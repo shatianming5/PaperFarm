@@ -1,3 +1,5 @@
+> [English](repo_inventory.en.md) · [简体中文](repo_inventory.md)
+
 ## Tree
 - `src/open_researcher/`: 主代码
 - `src/open_researcher/agents/`: agent adapter 实现
@@ -10,7 +12,7 @@
 - `.research/`: 运行期状态目录
 
 ## Entry Points
-- `pyproject.toml`: 暴露 `open-researcher = open_researcher.cli:app`
+- `pyproject.toml`: 暴露 `open-researcher`（主命令）与 `PaperFarm`（兼容别名）CLI entrypoints
 - `src/open_researcher/cli.py`: 主 CLI，包含 `run/init/status/results/export/doctor/demo`
 - `src/open_researcher/run_cmd.py`: interactive bootstrap/TUI 主路径
 - `src/open_researcher/headless.py`: headless bootstrap/JSONL 主路径

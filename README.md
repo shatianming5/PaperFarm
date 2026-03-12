@@ -14,11 +14,15 @@
 
 <p><em>🌱 Sow ideas. 🚜 Run experiments. 🌾 Harvest evidence. 📄</em></p>
 
+[**English**](README.md) · [**简体中文**](README.zh-CN.md)
+
 [**Quick Start**](#-quick-start) · [**How It Works**](#-how-it-works) · [**Agents**](#-supported-agents) · [**TUI Dashboard**](#-interactive-tui-dashboard) · [**CLI Reference**](#%EF%B8%8F-cli-reference) · [**Configuration**](#%EF%B8%8F-configuration) · [**Examples**](#-examples)
 
 </div>
 
 ---
+
+> CLI entrypoint: `open-researcher` (alias: `PaperFarm`).
 
 ## 🌾 Key Features
 
@@ -589,6 +593,17 @@ See [`examples/`](examples/) for complete setups:
 
 ---
 
+## 📚 Documentation
+
+- [README.md](README.md) (English)
+- [README.zh-CN.md](README.zh-CN.md) (简体中文)
+- [CONTRIBUTING.md](CONTRIBUTING.md) (English)
+- [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) (简体中文)
+- [docs/README.md](docs/README.md) (documentation index, English)
+- [docs/README.zh-CN.md](docs/README.zh-CN.md) (文档索引，简体中文)
+
+---
+
 ## 🧑‍🌾 Contributing
 
 Contributions are welcome! Please follow these steps:
@@ -597,7 +612,7 @@ Contributions are welcome! Please follow these steps:
 2. Fork the repository and create your feature branch
 3. Submit a pull request with a clear description
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines and [CHANGELOG.md](CHANGELOG.md) for version history.
+See [CONTRIBUTING.md](CONTRIBUTING.md) / [CONTRIBUTING.zh-CN.md](CONTRIBUTING.zh-CN.md) for contribution guidelines and [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ## 📄 License
 

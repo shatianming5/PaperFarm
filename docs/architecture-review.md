@@ -1,5 +1,7 @@
 # 架构审查报告（GPT-5.4 + Claude Opus 4.6 联合分析）
 
+> [English Summary](architecture-review.en.md) · [简体中文](architecture-review.md)
+
 > 分析日期：2026-03-10
 > 分析工具：Codex CLI (gpt-5.4, read-only, reasoning effort: xhigh)
 
