@@ -21,8 +21,8 @@ from open_researcher.git_safety import (
 from open_researcher.gpu_manager import GPUManager
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.results_cmd import load_results
-from open_researcher.storage import atomic_write_json
 from open_researcher.role_programs import resolve_role_program_file
+from open_researcher.storage import atomic_write_json
 from open_researcher.watchdog import TimeoutWatchdog
 from open_researcher.worker_plugins import (
     WorkerRuntimePlugins,
