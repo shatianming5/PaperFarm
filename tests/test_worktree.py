@@ -8,9 +8,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
+from open_researcher.git_safety import GitWorkspaceError, capture_clean_workspace_snapshot, ensure_clean_workspace
 from open_researcher.idea_pool import IdeaPool
 from open_researcher.storage import atomic_write_json
-from open_researcher.git_safety import capture_clean_workspace_snapshot
 from open_researcher.worktree import create_worktree, remove_worktree, worktrees_root
 
 
@@ -263,6 +265,26 @@ def test_worktree_restores_runtime_artifacts_and_skips_backup_overlays():
             check=True,
         ).stdout
         assert "work_dirs" not in status
+
+        remove_worktree(repo, wt_path)
+
+
+def test_worktree_overlay_manifest_preserves_clean_synced_overlays():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _init_git_repo(repo)
+        _setup_research(repo)
+
+        overlay = repo / "orthonet.py"
+        overlay.write_text("VALUE = 1\n", encoding="utf-8")
+
+        wt_path = create_worktree(repo, "overlay-manifest")
+
+        capture_clean_workspace_snapshot(wt_path)
+
+        (wt_path / "orthonet.py").write_text("VALUE = 2\n", encoding="utf-8")
+        with pytest.raises(GitWorkspaceError):
+            ensure_clean_workspace(wt_path, context="after overlay mutation")
 
         remove_worktree(repo, wt_path)
 

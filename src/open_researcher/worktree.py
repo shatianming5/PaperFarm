@@ -1,5 +1,6 @@
 """Git worktree helpers for parallel experiment isolation."""
 
+import json
 import hashlib
 import logging
 import os
@@ -8,7 +9,9 @@ import subprocess
 from pathlib import Path
 
 from open_researcher.workspace_paths import (
+    OVERLAY_MANIFEST_FILENAME,
     normalize_relative_path,
+    overlay_manifest_entry_for_path,
     runtime_git_exclude_patterns,
     runtime_output_roots,
     should_skip_overlay_path,
@@ -107,9 +110,10 @@ def create_worktree(repo_path: Path, worktree_name: str) -> Path:
         # all state files and their companion *.lock files resolve canonically.
         _replace_research_dir(wt_path, research_dir)
         _ensure_worktree_exclude_patterns(wt_path, _WORKTREE_EXCLUDE_PATTERNS)
-        _sync_source_overlays(repo_path, wt_path)
+        synced_overlay_paths = _sync_source_overlays(repo_path, wt_path)
         _sanitize_runtime_artifacts(wt_path)
         _mark_runtime_artifacts_skip_worktree(wt_path)
+        _write_overlay_manifest(wt_path, synced_overlay_paths)
     except Exception as exc:
         try:
             remove_worktree(repo_path, wt_path)
@@ -168,7 +172,7 @@ def _git_info_exclude_paths(repo_path: Path) -> list[Path]:
     return candidates
 
 
-def _sync_source_overlays(repo_path: Path, worktree_path: Path) -> None:
+def _sync_source_overlays(repo_path: Path, worktree_path: Path) -> list[Path]:
     patch = subprocess.run(
         ["git", "diff", "--binary", "HEAD", "--"],
         cwd=str(repo_path),
@@ -190,10 +194,12 @@ def _sync_source_overlays(repo_path: Path, worktree_path: Path) -> None:
             detail = applied.stderr.strip() or applied.stdout.strip() or "unknown git apply error"
             raise WorktreeError(f"Failed to apply working tree patch: {detail}")
 
-    for relative_path in _iter_untracked_overlay_paths(repo_path):
+    overlay_paths = _iter_untracked_overlay_paths(repo_path)
+    for relative_path in overlay_paths:
         source = repo_path / relative_path
         target = worktree_path / relative_path
         _copy_overlay_path(source, target)
+    return overlay_paths
 
 
 def _iter_untracked_overlay_paths(repo_path: Path) -> list[Path]:
@@ -310,6 +316,27 @@ def _mark_runtime_artifacts_skip_worktree(worktree_path: Path) -> None:
     for start in range(0, len(paths), chunk_size):
         chunk = paths[start : start + chunk_size]
         _run_git(worktree_path, "update-index", "--skip-worktree", "--", *chunk)
+
+
+def _write_overlay_manifest(worktree_path: Path, overlay_paths: list[Path]) -> None:
+    manifest_path = _git_overlay_manifest_path(worktree_path)
+    if manifest_path is None:
+        return
+    payload = {"paths": {}}
+    for relative_path in overlay_paths:
+        entry = overlay_manifest_entry_for_path(worktree_path / relative_path)
+        if entry is None:
+            continue
+        payload["paths"][relative_path.as_posix()] = entry
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _git_overlay_manifest_path(repo_path: Path) -> Path | None:
+    candidates = _git_info_exclude_paths(repo_path)
+    if not candidates:
+        return None
+    return candidates[0].parent.parent / OVERLAY_MANIFEST_FILENAME
 
 
 def remove_worktree(repo_path: Path, worktree_path: Path) -> None:

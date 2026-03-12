@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import PurePosixPath
+from typing import Any
 
 RUNTIME_OUTPUT_ROOTS = (
     "work_dirs",
@@ -17,6 +19,8 @@ RUNTIME_OUTPUT_ROOTS = (
     "coverage",
     "htmlcov",
 )
+
+OVERLAY_MANIFEST_FILENAME = "open_researcher_overlay_manifest.json"
 
 OVERLAY_SKIP_PARTS = {
     ".git",
@@ -102,3 +106,15 @@ def runtime_output_roots() -> tuple[str, ...]:
 def _first_path_part(path: str) -> str:
     parts = PurePosixPath(path).parts
     return parts[0] if parts else ""
+
+
+def overlay_manifest_entry_for_path(path) -> dict[str, Any] | None:
+    if path.is_symlink():
+        return {"kind": "symlink", "target": str(path.readlink())}
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {"kind": "file", "size": int(path.stat().st_size), "sha256": digest.hexdigest()}
