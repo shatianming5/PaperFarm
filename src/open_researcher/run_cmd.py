@@ -66,6 +66,46 @@ def _overall_exit_code(exit_codes: dict[str, int], *, crash_limited: bool = Fals
     return 0
 
 
+def _sync_runtime_state(research: Path, cfg) -> None:
+    initialize_graph_runtime_state(research, cfg)
+    ensure_bootstrap_state(research / "bootstrap_state.json")
+
+
+def _notify_prepare_failed(app, prepare_code: int) -> None:
+    try:
+        app.call_from_thread(
+            app.notify,
+            f"Prepare failed (code={prepare_code}). See .research/prepare.log.",
+            severity="error",
+        )
+        app.call_from_thread(app.exit)
+    except RuntimeError:
+        pass
+
+
+def _finalize_runtime_exit(
+    *,
+    repo_path: Path,
+    exit_codes: dict[str, int],
+    loop: ResearchLoop | None,
+    summary_labels: list[tuple[str, str]],
+    show_missing: bool = False,
+) -> int:
+    print_exit_summary(
+        console,
+        exit_codes,
+        summary_labels,
+        show_missing=show_missing,
+    )
+    from open_researcher.status_cmd import print_status
+
+    print_status(repo_path)
+    return _overall_exit_code(
+        exit_codes,
+        crash_limited=bool(loop and loop.last_stop_reason == "crash_limit"),
+    )
+
+
 def render_scout_program(research_dir: Path, tag: str, goal: str | None) -> None:
     """Render scout_program.md with optional goal."""
     env = Environment(loader=PackageLoader("open_researcher", "templates"))
@@ -155,15 +195,7 @@ def _run_prepare_then_graph(
     )
     exit_codes["prepare"] = prepare_code
     if prepare_code != 0:
-        try:
-            app.call_from_thread(
-                app.notify,
-                f"Prepare failed (code={prepare_code}). See .research/prepare.log.",
-                severity="error",
-            )
-            app.call_from_thread(app.exit)
-        except RuntimeError:
-            pass
+        _notify_prepare_failed(app, prepare_code)
         return
     exit_codes.update(
         loop.run_graph_protocol(
@@ -209,8 +241,7 @@ def do_run(
         raise SystemExit(1)
 
     cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    _sync_runtime_state(research, cfg)
     manager_agent, critic_agent, exp_agent = _resolve_research_agents(
         cfg,
         primary_agent_name=agent_name,
@@ -272,25 +303,17 @@ def do_run(
         return [stop.set, manager_agent.terminate, critic_agent.terminate, exp_agent.terminate]
 
     run_tui_session(repo_path, research_dir=research, setup=setup)
-    print_exit_summary(
-        console,
-        exit_codes,
-        [
+    return _finalize_runtime_exit(
+        repo_path=repo_path,
+        exit_codes=exit_codes,
+        loop=loop_ref.get("loop"),
+        summary_labels=[
             ("prepare", "Prepare"),
             ("manager", "Research Manager"),
             ("critic", "Research Critic"),
             ("exp", "Experiment Agent"),
         ],
         show_missing=True,
-    )
-
-    from open_researcher.status_cmd import print_status
-
-    print_status(repo_path)
-    loop = loop_ref.get("loop")
-    return _overall_exit_code(
-        exit_codes,
-        crash_limited=bool(loop and loop.last_stop_reason == "crash_limit"),
     )
 
 
@@ -311,8 +334,7 @@ def do_start(
         tag = date.today().strftime("%b%d").lower()
     research = do_start_init(repo_path, tag=tag)
     cfg = _load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    _sync_runtime_state(research, cfg)
 
     scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
     manager_agent, critic_agent, exp_agent = _resolve_research_agents(
@@ -352,8 +374,7 @@ def do_start(
                 refreshed_cfg = _load_runtime_config(
                     research, workers=workers, max_experiments=max_experiments, token_budget=token_budget
                 )
-                initialize_graph_runtime_state(research, refreshed_cfg)
-                ensure_bootstrap_state(research / "bootstrap_state.json")
+                _sync_runtime_state(research, refreshed_cfg)
                 cfg_ref["cfg"] = refreshed_cfg
                 loop.cfg = refreshed_cfg
                 prepare_code, _ = run_bootstrap_prepare(
@@ -364,15 +385,7 @@ def do_start(
                 )
                 exit_codes["prepare"] = prepare_code
                 if prepare_code != 0:
-                    try:
-                        app.call_from_thread(
-                            app.notify,
-                            f"Prepare failed (code={prepare_code}). See .research/prepare.log.",
-                            severity="error",
-                        )
-                        app.call_from_thread(app.exit)
-                    except RuntimeError:
-                        pass
+                    _notify_prepare_failed(app, prepare_code)
                     return
                 try:
                     app.call_from_thread(setattr, app, "app_phase", "reviewing")
@@ -437,23 +450,15 @@ def do_start(
         initial_phase="scouting",
         setup=setup,
     )
-    print_exit_summary(
-        console,
-        exit_codes,
-        [
+    return _finalize_runtime_exit(
+        repo_path=repo_path,
+        exit_codes=exit_codes,
+        loop=loop_ref.get("loop"),
+        summary_labels=[
             ("scout", "Scout"),
             ("prepare", "Prepare"),
             ("manager", "Research Manager"),
             ("critic", "Research Critic"),
             ("exp", "Experiment Agent"),
         ],
-    )
-
-    from open_researcher.status_cmd import print_status
-
-    print_status(repo_path)
-    loop = loop_ref.get("loop")
-    return _overall_exit_code(
-        exit_codes,
-        crash_limited=bool(loop and loop.last_stop_reason == "crash_limit"),
     )

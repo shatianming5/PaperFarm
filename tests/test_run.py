@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -101,3 +102,44 @@ def test_run_launches_graph_protocol():
 
         mock_run_graph.assert_called_once()
         assert mock_run_graph.call_args.kwargs["parallel_batch_runner"] is not None
+
+
+def test_overall_exit_code_prioritizes_prepare_before_agent_roles():
+    from open_researcher.run_cmd import _overall_exit_code
+
+    code = _overall_exit_code({"prepare": 5, "manager": 2, "exp": 7})
+
+    assert code == 5
+
+
+def test_overall_exit_code_prefers_experiment_code_when_crash_limited():
+    from open_researcher.run_cmd import _overall_exit_code
+
+    assert _overall_exit_code({"manager": 3, "exp": 9}, crash_limited=True) == 9
+    assert _overall_exit_code({}, crash_limited=True) == 1
+
+
+def test_finalize_runtime_exit_prints_summary_status_and_returns_crash_limit_code(tmp_path):
+    from open_researcher.run_cmd import _finalize_runtime_exit
+
+    repo = tmp_path
+    loop = SimpleNamespace(last_stop_reason="crash_limit")
+    exit_codes = {"manager": 2, "exp": 6}
+    labels = [("manager", "Research Manager"), ("exp", "Experiment Agent")]
+
+    with (
+        patch("open_researcher.run_cmd.print_exit_summary") as mock_summary,
+        patch("open_researcher.status_cmd.print_status") as mock_status,
+    ):
+        code = _finalize_runtime_exit(
+            repo_path=repo,
+            exit_codes=exit_codes,
+            loop=loop,
+            summary_labels=labels,
+            show_missing=True,
+        )
+
+    assert code == 6
+    mock_summary.assert_called_once()
+    assert mock_summary.call_args.kwargs["show_missing"] is True
+    mock_status.assert_called_once_with(repo)
