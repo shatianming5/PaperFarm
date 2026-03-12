@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from open_researcher.bootstrap import ensure_bootstrap_state
 from open_researcher.config import load_config, require_supported_protocol
-from open_researcher.graph_protocol import resolve_role_agent_name
+from open_researcher.graph_protocol import initialize_graph_runtime_state, resolve_role_agent_name
 from open_researcher.parallel_runtime import run_parallel_experiment_batch
 from open_researcher.workflow_options import apply_worker_override
 
@@ -81,3 +82,9 @@ def build_parallel_runner(
         on_output,
         **kwargs,
     )
+
+
+def sync_runtime_state(research: Path, cfg) -> None:
+    """Ensure graph and bootstrap runtime artifacts are initialized."""
+    initialize_graph_runtime_state(research, cfg)
+    ensure_bootstrap_state(research / "bootstrap_state.json")

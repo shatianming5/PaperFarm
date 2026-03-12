@@ -16,7 +16,6 @@ from open_researcher.bootstrap import (
     format_bootstrap_dry_run,
     run_bootstrap_prepare,
 )
-from open_researcher.graph_protocol import initialize_graph_runtime_state
 from open_researcher.research_loop import (
     ResearchLoop,
 )
@@ -35,6 +34,7 @@ from open_researcher.runtime_entrypoints import (
     load_runtime_config,
     resolve_research_agents,
     resolve_scout_agent,
+    sync_runtime_state,
 )
 from open_researcher.tui_runner import (
     print_exit_summary,
@@ -151,8 +151,7 @@ def do_run(
         raise SystemExit(1)
 
     cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    sync_runtime_state(research, cfg)
     manager_agent, critic_agent, exp_agent = resolve_research_agents(
         cfg,
         primary_agent_name=agent_name,
@@ -254,8 +253,7 @@ def do_start(
         tag = date.today().strftime("%b%d").lower()
     research = do_start_init(repo_path, tag=tag)
     cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    sync_runtime_state(research, cfg)
 
     scout_agent = resolve_scout_agent(
         cfg,
@@ -300,8 +298,7 @@ def do_start(
                 refreshed_cfg = load_runtime_config(
                     research, workers=workers, max_experiments=max_experiments, token_budget=token_budget
                 )
-                initialize_graph_runtime_state(research, refreshed_cfg)
-                ensure_bootstrap_state(research / "bootstrap_state.json")
+                sync_runtime_state(research, refreshed_cfg)
                 cfg_ref["cfg"] = refreshed_cfg
                 loop.cfg = refreshed_cfg
                 prepare_code, _ = run_bootstrap_prepare(

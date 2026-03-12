@@ -5,9 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from open_researcher.agent_runtime import resolve_agent
-from open_researcher.bootstrap import ensure_bootstrap_state, run_bootstrap_prepare
+from open_researcher.bootstrap import run_bootstrap_prepare
 from open_researcher.event_journal import EventJournal
-from open_researcher.graph_protocol import initialize_graph_runtime_state
 from open_researcher.research_events import (
     ReviewAutoConfirmed,
     RoleFailed,
@@ -32,6 +31,7 @@ from open_researcher.runtime_entrypoints import (
     load_runtime_config,
     resolve_research_agents,
     resolve_scout_agent,
+    sync_runtime_state,
 )
 
 _resolve_agent = resolve_agent
@@ -114,8 +114,7 @@ def do_run_headless(
         raise SystemExit(1)
 
     cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    sync_runtime_state(research, cfg)
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
@@ -194,8 +193,7 @@ def do_start_headless(
 
     research = do_start_init(repo_path, tag=tag)
     cfg = load_runtime_config(research, workers=workers, max_experiments=max_experiments, token_budget=token_budget)
-    initialize_graph_runtime_state(research, cfg)
-    ensure_bootstrap_state(research / "bootstrap_state.json")
+    sync_runtime_state(research, cfg)
 
     effective_max = cfg.max_experiments
 
@@ -244,7 +242,7 @@ def do_start_headless(
             max_experiments=max_experiments,
             token_budget=token_budget,
         )
-        initialize_graph_runtime_state(research, cfg)
+        sync_runtime_state(research, cfg)
         prepare_code, _state = run_bootstrap_prepare(
             repo_path,
             research,

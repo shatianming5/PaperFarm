@@ -13,6 +13,7 @@ from open_researcher.runtime_entrypoints import (
     load_runtime_config,
     resolve_research_agents,
     resolve_scout_agent,
+    sync_runtime_state,
 )
 
 
@@ -153,3 +154,25 @@ def test_build_parallel_runner_calls_parallel_runtime(monkeypatch, tmp_path):
     assert captured["exp_agent"] is exp_agent
     assert captured["on_output"] is on_output
     assert captured["kwargs"] == {"batch_id": "test"}
+
+
+def test_sync_runtime_state_initializes_graph_and_bootstrap(monkeypatch, tmp_path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    cfg = SimpleNamespace(mode="autonomous")
+    calls: dict[str, object] = {}
+
+    def fake_init_graph(research_dir, cfg_obj):
+        calls["init_graph"] = (research_dir, cfg_obj)
+        return {}
+
+    def fake_ensure_bootstrap(path):
+        calls["ensure_bootstrap"] = path
+
+    monkeypatch.setattr("open_researcher.runtime_entrypoints.initialize_graph_runtime_state", fake_init_graph)
+    monkeypatch.setattr("open_researcher.runtime_entrypoints.ensure_bootstrap_state", fake_ensure_bootstrap)
+
+    sync_runtime_state(research, cfg)
+
+    assert calls["init_graph"] == (research, cfg)
+    assert calls["ensure_bootstrap"] == research / "bootstrap_state.json"
