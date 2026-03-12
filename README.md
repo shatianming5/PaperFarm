@@ -404,7 +404,7 @@ make ci     # full local CI: lint + test + coverage + package smoke
 
 | Command | What It Does |
 |:---|:---|
-| `status [--sparkline]` | Show experiment progress |
+| `status [--sparkline]` | Show experiment progress, runtime profile, and observability boundaries |
 | `results [--chart primary] [--json]` | Print results table or chart |
 | `logs [--follow] [--errors]` | View agent logs |
 | `export` | Export markdown report |
@@ -499,6 +499,13 @@ agents:                       # per-agent overrides (optional)
 ```
 
 </details>
+
+### Runtime Profiles & Observability
+
+- `runtime.*` config toggles resolve into explicit profiles (`minimal`, `custom`, `advanced`) for parallel workers.
+- `PaperFarm status` now shows resolved runtime mode/profile, effective worker count, and plugin boundaries.
+- `events.jsonl` is the canonical runtime/control stream; `control.json`, `activity.json`, and `gpu_status.json` are compatibility or derived snapshots.
+- See [Advanced Runtime Profiles & Observability](docs/advanced-runtime-observability.md) for details.
 
 ---
 

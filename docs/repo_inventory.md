@@ -31,7 +31,7 @@
 - `src/open_researcher/parallel_runtime.py`: 并行 experiment worker runtime。
 - `src/open_researcher/tui/app.py`: 交互式监控 UI。
 - `src/open_researcher/tui/events.py`: typed event -> TUI 日志渲染。
-- `src/open_researcher/status_cmd.py`: 汇总 `.research/` 状态并显示进度。
+- `src/open_researcher/status_cmd.py`: 汇总 `.research/` 状态、runtime profile（minimal/custom/advanced）与可观测性边界。
 - `src/open_researcher/results_cmd.py`: 读取/打印/图表化 `results.tsv`。
 
 ## Config & Data
@@ -84,3 +84,4 @@ pytest -q
 - 当前“接口”主要是 CLI、配置文件、状态文件、typed events，不是 HTTP service。
 - `research-v1` 已经是唯一执行协议，但并行 experiment worker 仍主要复用 `idea_pool.json` 兼容层。
 - TUI 和 headless 都消费同一套 typed events，graph tracing 在 `research-v1` 下完整可见。
+- `events.jsonl` 是 runtime/control 的 canonical stream；`control/activity/gpu_status` 是兼容或派生快照（见 `docs/advanced-runtime-observability.md`）。
