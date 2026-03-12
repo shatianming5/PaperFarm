@@ -92,6 +92,28 @@ def ensure_legacy_role_programs(research_dir: Path, roles: list[RoleProgram]) ->
         legacy_path.write_text(internal_path.read_text(encoding="utf-8"), encoding="utf-8")
 
 
+def render_scout_program(
+    research_dir: Path,
+    *,
+    tag: str,
+    goal: str | None,
+    env: Environment | None = None,
+) -> str:
+    """Render scout prompt to resolved role path and keep legacy compatibility file in sync."""
+    template_env = env or _template_env()
+    content = template_env.get_template(_ROLE_PROGRAM_SPECS["scout"]["template"]).render(
+        {"tag": tag, "goal": goal or ""}
+    )
+    scout_rel = resolve_role_program_file(research_dir, "scout")
+    scout_path = research_dir / scout_rel
+    scout_path.parent.mkdir(parents=True, exist_ok=True)
+    scout_path.write_text(content, encoding="utf-8")
+    legacy_rel = legacy_role_program_file("scout")
+    if scout_rel != legacy_rel:
+        (research_dir / legacy_rel).write_text(content, encoding="utf-8")
+    return scout_rel
+
+
 def missing_role_programs(research_dir: Path) -> list[RoleProgram]:
     """Return roles missing both internal and legacy program files."""
     missing: list[RoleProgram] = []

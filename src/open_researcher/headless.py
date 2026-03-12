@@ -32,6 +32,7 @@ from open_researcher.research_loop import (
 from open_researcher.research_loop import (
     set_paused as _set_paused,
 )
+from open_researcher.role_programs import render_scout_program
 from open_researcher.workflow_options import apply_worker_override
 
 _resolve_agent = resolve_agent
@@ -238,7 +239,7 @@ def do_start_headless(
     """Run the full bootstrap flow without TUI — structured JSON Lines to stdout."""
     from datetime import date
 
-    from open_researcher.run_cmd import do_start_init, render_scout_program
+    from open_researcher.run_cmd import do_start_init
 
     if tag is None:
         tag = date.today().strftime("%b%d").lower()

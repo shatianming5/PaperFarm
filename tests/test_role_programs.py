@@ -6,9 +6,11 @@ from pathlib import Path
 
 from open_researcher.role_programs import (
     ensure_internal_role_programs,
+    ensure_legacy_role_programs,
     internal_role_program_file,
     legacy_role_program_file,
     missing_role_programs,
+    render_scout_program,
     resolve_role_program_file,
 )
 
@@ -84,3 +86,30 @@ def test_missing_role_programs_reports_unavailable_roles(tmp_path: Path):
 
     missing = missing_role_programs(research)
     assert missing == ["scout", "critic", "experiment"]
+
+
+def test_ensure_legacy_role_programs_copies_internal_content(tmp_path: Path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    internal = research / internal_role_program_file("scout")
+    internal.parent.mkdir(parents=True, exist_ok=True)
+    internal.write_text("# internal scout\n", encoding="utf-8")
+
+    ensure_legacy_role_programs(research, ["scout"])
+
+    legacy = research / legacy_role_program_file("scout")
+    assert legacy.read_text(encoding="utf-8") == "# internal scout\n"
+
+
+def test_render_scout_program_writes_resolved_and_legacy_paths(tmp_path: Path):
+    research = tmp_path / ".research"
+    research.mkdir()
+    internal = research / internal_role_program_file("scout")
+    internal.parent.mkdir(parents=True, exist_ok=True)
+    internal.write_text("# stale scout\n", encoding="utf-8")
+
+    resolved = render_scout_program(research, tag="demo", goal="improve f1")
+
+    assert resolved == internal_role_program_file("scout")
+    assert "improve f1" in internal.read_text(encoding="utf-8")
+    assert "improve f1" in (research / legacy_role_program_file("scout")).read_text(encoding="utf-8")
