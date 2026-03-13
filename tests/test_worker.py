@@ -18,8 +18,8 @@ from open_researcher.idea_pool import IdeaPool
 from open_researcher.worker import WorkerManager
 from open_researcher.worker_plugins import (
     FailureMemoryPlugin,
-    GPUAllocatorPlugin,
     GPUAllocation,
+    GPUAllocatorPlugin,
     WorkerRuntimePlugins,
     WorkspaceIsolationError,
 )

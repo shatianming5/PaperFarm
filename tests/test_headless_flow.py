@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import yaml
+
 from open_researcher.control_plane import issue_control_command
 
 

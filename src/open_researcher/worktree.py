@@ -1,7 +1,7 @@
 """Git worktree helpers for parallel experiment isolation."""
 
-import json
 import hashlib
+import json
 import logging
 import os
 import shutil
