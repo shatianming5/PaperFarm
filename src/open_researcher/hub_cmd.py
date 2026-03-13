@@ -15,6 +15,7 @@ from open_researcher.hub import (
     HUB_REGISTRY_URL,
     apply_manifest_to_config_yaml,
     fetch_index,
+    fetch_index_full,
     fetch_manifest,
     manifest_summary,
     manifest_to_bootstrap_overrides,
@@ -48,18 +49,51 @@ def lookup(
 
 @hub_app.command(name="list")
 def list_entries(
+    area: str = typer.Option(None, "--area", help="Filter by area (e.g. nlp, cv, ml-systems, agents)"),
+    award: str = typer.Option(None, "--award", help="Filter by award (best-paper, oral, spotlight)"),
     registry: str = typer.Option(HUB_REGISTRY_URL, "--registry", help="Hub registry base URL"),
 ) -> None:
     """List all entries in the Hub registry."""
+    from rich.table import Table
+
     try:
-        index = fetch_index(registry_url=registry)
+        entries = fetch_index_full(registry_url=registry)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
-    console.print(f"\n[bold]PaperFarm Hub — {len(index)} entries[/bold]\n")
-    for arxiv_id, folder in sorted(index.items()):
-        console.print(f"  [cyan]{arxiv_id}[/cyan]  {folder}")
+    if area:
+        entries = [e for e in entries if e.get("area") == area]
+    if award:
+        entries = [e for e in entries if e.get("venue", {}).get("award") == award]
+
+    table = Table(title=f"PaperFarm Hub — {len(entries)} entries")
+    table.add_column("ArXiv ID", style="cyan", no_wrap=True)
+    table.add_column("Name")
+    table.add_column("Area")
+    table.add_column("Venue")
+    table.add_column("Award")
+    table.add_column("GPU")
+    table.add_column("✓")
+
+    award_style = {"best-paper": "[gold1]★[/gold1]", "oral": "[green]●[/green]", "spotlight": "[blue]◆[/blue]"}
+
+    for e in entries:
+        venue = e.get("venue", {})
+        env = e.get("env_summary", {})
+        status = e.get("status", {})
+        award_val = venue.get("award") or ""
+        table.add_row(
+            e.get("arxiv_id", ""),
+            e.get("short_name", e.get("folder", "")),
+            e.get("area", ""),
+            f"{venue.get('name', '')} {venue.get('year', '')}",
+            award_style.get(award_val, award_val),
+            "yes" if env.get("gpu_required") else "no",
+            str(status.get("verified_count", 0)),
+        )
+
+    console.print(table)
 
 
 @hub_app.command()

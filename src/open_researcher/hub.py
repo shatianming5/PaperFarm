@@ -24,12 +24,28 @@ def _fetch_json(url: str, timeout: int = 10) -> dict[str, Any]:
 
 
 def fetch_index(registry_url: str = HUB_REGISTRY_URL) -> dict[str, str]:
-    """Return mapping of arxiv_id -> folder name from the Hub index."""
+    """Return mapping of arxiv_id -> folder name from the Hub index (supports v1 and v2)."""
     index = _fetch_json(f"{registry_url}/index.json")
     entries = index.get("entries", {})
-    if not isinstance(entries, dict):
-        raise ValueError("Hub index.json has unexpected format")
-    return entries
+    # v2: entries is a list of dicts with arxiv_id + folder fields
+    if isinstance(entries, list):
+        return {e["arxiv_id"]: e["folder"] for e in entries if "arxiv_id" in e and "folder" in e}
+    # v1: entries is a flat {arxiv_id: folder} dict
+    if isinstance(entries, dict):
+        return entries
+    raise ValueError("Hub index.json has unexpected format")
+
+
+def fetch_index_full(registry_url: str = HUB_REGISTRY_URL) -> list[dict[str, Any]]:
+    """Return the full index entry list (v2 only) for catalog/listing use cases."""
+    index = _fetch_json(f"{registry_url}/index.json")
+    entries = index.get("entries", [])
+    if isinstance(entries, list):
+        return entries
+    # v1 fallback: synthesize minimal entry objects
+    if isinstance(entries, dict):
+        return [{"arxiv_id": k, "folder": v} for k, v in entries.items()]
+    return []
 
 
 def fetch_manifest(arxiv_id: str, registry_url: str = HUB_REGISTRY_URL) -> dict[str, Any]:
