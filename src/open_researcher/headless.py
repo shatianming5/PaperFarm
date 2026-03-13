@@ -176,12 +176,14 @@ def do_run_headless(
     effective_max = cfg.max_experiments
 
     logger = HeadlessLogger(stream=stream, log_path=research / "events.jsonl")
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
-        cfg,
-        primary_agent_name=agent_name,
-    )
-
+    manager_agent = None
+    critic_agent = None
+    exp_agent = None
     try:
+        manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+            cfg,
+            primary_agent_name=agent_name,
+        )
         logger.on_event(
             SessionStarted(
                 goal=_read_goal_text(research),
@@ -242,10 +244,11 @@ def do_run_headless(
         raise
     finally:
         for agent in (manager_agent, critic_agent, exp_agent):
-            try:
-                agent.terminate()
-            except Exception:
-                pass
+            if agent is not None:
+                try:
+                    agent.terminate()
+                except Exception:
+                    pass
         logger.close()
 
 
@@ -288,13 +291,16 @@ def do_start_headless(
         )
     )
 
-    scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
-    manager_agent, critic_agent, exp_agent = _resolve_research_agents(
-        cfg,
-        primary_agent_name=agent_name,
-    )
-
+    scout_agent = None
+    manager_agent = None
+    critic_agent = None
+    exp_agent = None
     try:
+        scout_agent = _resolve_scout_agent(cfg, primary_agent_name=agent_name)
+        manager_agent, critic_agent, exp_agent = _resolve_research_agents(
+            cfg,
+            primary_agent_name=agent_name,
+        )
         render_scout_program(research, tag=tag, goal=goal)
         (research / "goal.md").write_text(f"# Research Goal\n\n{goal}\n")
 
@@ -367,8 +373,9 @@ def do_start_headless(
         raise
     finally:
         for agent in (scout_agent, manager_agent, critic_agent, exp_agent):
-            try:
-                agent.terminate()
-            except Exception:
-                pass
+            if agent is not None:
+                try:
+                    agent.terminate()
+                except Exception:
+                    pass
         logger.close()

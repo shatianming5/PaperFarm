@@ -750,6 +750,16 @@ def _ensure_python_environment(repo_path: Path, state: dict, log_path: Path) -> 
     return 0, ""
 
 
+def _safe_prepare_event(on_prepare_event, event):
+    """Invoke the prepare event callback, swallowing exceptions to prevent propagation."""
+    if on_prepare_event is None:
+        return
+    try:
+        on_prepare_event(event)
+    except Exception:
+        logger.debug("on_prepare_event callback raised; ignoring", exc_info=True)
+
+
 def run_bootstrap_prepare(
     repo_path: Path,
     research_dir: Path,
@@ -757,6 +767,9 @@ def run_bootstrap_prepare(
     *,
     on_prepare_event=None,
 ) -> tuple[int, dict]:
+    if on_prepare_event is not None:
+        _raw_event_cb = on_prepare_event
+        on_prepare_event = lambda event: _safe_prepare_event(_raw_event_cb, event)
     state_path = research_dir / "bootstrap_state.json"
     ensure_bootstrap_state(state_path)
     state = resolve_bootstrap_plan(repo_path, research_dir, cfg)

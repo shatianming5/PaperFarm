@@ -91,6 +91,7 @@ class GPUAllocatorPlugin:
             try:
                 status = self.manager.refresh()
             except Exception:
+                logger.debug("GPU refresh failed in saturation mode", exc_info=True)
                 status = []
             slots = []
             for gpu in status if isinstance(status, list) else []:
@@ -113,6 +114,7 @@ class GPUAllocatorPlugin:
                 memory_mb=max(self.default_memory_per_worker_mb, 1),
             )
         except Exception:
+            logger.debug("GPU plan_slots failed", exc_info=True)
             slots = []
         if isinstance(slots, list) and slots:
             return slots
@@ -123,6 +125,7 @@ class GPUAllocatorPlugin:
         try:
             status = self.manager.refresh()
         except Exception:
+            logger.debug("GPU status refresh failed", exc_info=True)
             status = []
         return status if isinstance(status, list) else []
 

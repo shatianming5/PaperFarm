@@ -86,6 +86,26 @@ def _read_config_payload(research_dir: Path, *, strict: bool = False) -> dict[st
     return raw
 
 
+def _cfg_int(value, default: int) -> int:
+    """Parse a config value as int, using *default* only when value is None."""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _cfg_float(value, default: float) -> float:
+    """Parse a config value as float, using *default* only when value is None."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
     """Load and parse config.yaml into a typed dataclass."""
     raw = _read_config_payload(research_dir, strict=strict)
@@ -106,35 +126,35 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         _policy = "warn"
     return ResearchConfig(
         mode=raw.get("mode", "autonomous"),
-        timeout=int(exp.get("timeout", 600) or 600),
-        max_crashes=int(exp.get("max_consecutive_crashes", 3) or 3),
-        max_experiments=int(exp.get("max_experiments", 0) or 0),
-        max_workers=int(exp.get("max_parallel_workers", 0) or 0),
+        timeout=_cfg_int(exp.get("timeout"), 600),
+        max_crashes=_cfg_int(exp.get("max_consecutive_crashes"), 3),
+        max_experiments=_cfg_int(exp.get("max_experiments"), 0),
+        max_workers=_cfg_int(exp.get("max_parallel_workers"), 0),
         worker_agent=exp.get("worker_agent", ""),
-        token_budget=max(int(exp.get("token_budget", 0) or 0), 0),
+        token_budget=max(_cfg_int(exp.get("token_budget"), 0), 0),
         budget_policy=_policy,
-        budget_warning_threshold=float(exp.get("budget_warning_threshold", 0.8) or 0.8),
-        context_token_limit=max(int(exp.get("context_token_limit", 50000) or 50000), 0),
+        budget_warning_threshold=_cfg_float(exp.get("budget_warning_threshold"), 0.8),
+        context_token_limit=max(_cfg_int(exp.get("context_token_limit"), 50000), 0),
         primary_metric=metrics.get("name", ""),
         direction=metrics.get("direction", ""),
         web_search=research.get("web_search", True),
-        search_interval=int(research.get("search_interval", 5) or 5),
+        search_interval=_cfg_int(research.get("search_interval"), 5),
         remote_hosts=gpu.get("remote_hosts", []),
         enable_gpu_allocation=runtime.get("gpu_allocation", True),
         enable_failure_memory=runtime.get("failure_memory", True),
         enable_worktree_isolation=runtime.get("worktree_isolation", True),
         protocol=protocol,
-        manager_batch_size=max(int(research.get("manager_batch_size", 3) or 3), 1),
+        manager_batch_size=max(_cfg_int(research.get("manager_batch_size"), 3), 1),
         critic_repro_policy=str(research.get("critic_repro_policy", "best_or_surprising") or "best_or_surprising"),
         enable_ideation_memory=bool(memory.get("ideation", True)),
         enable_experiment_memory=bool(memory.get("experiment", True)),
         enable_repo_type_prior=bool(memory.get("repo_type_prior", True)),
         scheduler_objective=str(scheduler.get("objective", "gain_per_resource_hour") or "gain_per_resource_hour"),
         scheduler_allow_backfill=bool(scheduler.get("allow_backfill", True)),
-        scheduler_backfill_threshold_minutes=max(int(scheduler.get("backfill_threshold_minutes", 30) or 30), 1),
+        scheduler_backfill_threshold_minutes=max(_cfg_int(scheduler.get("backfill_threshold_minutes"), 30), 1),
         scheduler_preemption=str(scheduler.get("preemption", "none") or "none"),
         scheduler_single_gpu_qualification_timeout_minutes=max(
-            int(scheduler.get("single_gpu_qualification_timeout_minutes", 10) or 10),
+            _cfg_int(scheduler.get("single_gpu_qualification_timeout_minutes"), 10),
             1,
         ),
         environment_text=str(raw.get("environment", "") or ""),
@@ -150,12 +170,12 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         bootstrap_requires_gpu=bool(bootstrap.get("requires_gpu", False)),
         hub_arxiv_id=str(bootstrap.get("hub_arxiv_id", "") or ""),
         hub_manifest_source=str(bootstrap.get("hub_manifest_source", "") or ""),
-        gpu_default_memory_per_worker_mb=max(int(gpu.get("default_memory_per_worker_mb", 4096) or 4096), 0),
+        gpu_default_memory_per_worker_mb=max(_cfg_int(gpu.get("default_memory_per_worker_mb"), 4096), 0),
         gpu_allow_same_gpu_packing=bool(gpu.get("allow_same_gpu_packing", True)),
         gpu_packing_signal=str(gpu.get("packing_signal", "memory_only") or "memory_only"),
-        gpu_single_task_headroom_ratio=max(float(gpu.get("single_task_headroom_ratio", 0.10) or 0.10), 0.0),
-        gpu_single_task_headroom_mb=max(int(gpu.get("single_task_headroom_mb", 2048) or 2048), 0),
-        gpu_reservation_ttl_minutes=max(int(gpu.get("reservation_ttl_minutes", 240) or 240), 0),
+        gpu_single_task_headroom_ratio=max(_cfg_float(gpu.get("single_task_headroom_ratio"), 0.10), 0.0),
+        gpu_single_task_headroom_mb=max(_cfg_int(gpu.get("single_task_headroom_mb"), 2048), 0),
+        gpu_reservation_ttl_minutes=max(_cfg_int(gpu.get("reservation_ttl_minutes"), 240), 0),
         resource_profiles=resources.get("profiles", {}) if isinstance(resources.get("profiles", {}), dict) else {},
         role_agents=roles if isinstance(roles, dict) else {},
         agent_config=raw.get("agents", {}),

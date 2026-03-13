@@ -128,7 +128,7 @@ def install(
 
     # Check hardware requirements
     resources = manifest.get("resources") if isinstance(manifest.get("resources"), dict) else {}
-    gpu_req = str(resources.get("gpu", "none") or "none").strip()
+    gpu_req = str(resources.get("gpu", "none") or "none").strip().lower()
     min_vram = resources.get("min_vram_gb")
     if gpu_req == "required":
         try:
@@ -145,6 +145,8 @@ def install(
         except ImportError:
             if gpu_req == "required":
                 console.print("\n[yellow][WARN] GPU required but torch not installed — cannot check VRAM.[/yellow]")
+        except Exception as exc:
+            console.print(f"\n[yellow][WARN] GPU check failed: {exc}[/yellow]")
 
     # Step 1: install
     if not install_cmd:
@@ -159,8 +161,9 @@ def install(
             raise typer.Exit(code=1)
         result = subprocess.run(argv, timeout=600)
         if result.returncode != 0:
+            exit_code = max(result.returncode, 1)
             console.print(f"[red]Install failed (exit {result.returncode}).[/red]")
-            raise typer.Exit(code=result.returncode)
+            raise typer.Exit(code=exit_code)
         console.print("[green]Install OK.[/green]")
 
     # Step 2: smoke test
@@ -195,8 +198,9 @@ def install(
         console.print(f"  $ {' '.join(smoke_argv[1:])}")
         result = subprocess.run(smoke_argv, timeout=300)
         if result.returncode != 0:
+            exit_code = max(result.returncode, 1)
             console.print(f"[red]Smoke test failed (exit {result.returncode}).[/red]")
-            raise typer.Exit(code=result.returncode)
+            raise typer.Exit(code=exit_code)
     except subprocess.TimeoutExpired:
         console.print("[red]Smoke test timed out after 300s.[/red]")
         raise typer.Exit(code=124)

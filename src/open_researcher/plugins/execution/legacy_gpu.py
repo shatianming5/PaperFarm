@@ -99,7 +99,7 @@ class GPUManager:
     def _read(self) -> dict:
         if self.status_file.exists():
             try:
-                return self._normalize_payload(json.loads(self.status_file.read_text()))
+                return self._normalize_payload(json.loads(self.status_file.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError):
                 pass
         return self._default_payload()
@@ -234,7 +234,21 @@ class GPUManager:
         kept: list[dict] = []
         for res in reservations:
             age = _reservation_age_minutes(res)
-            if age is not None and age > self.reservation_ttl_minutes:
+            if age is None:
+                # User-pinned reservations intentionally have no started_at — keep them
+                kind = str(res.get("kind", "")).strip()
+                if kind == "user_pin":
+                    kept.append(res)
+                    continue
+                # Unknown age (missing/malformed started_at): treat as stale to prevent accumulation
+                tag = str(res.get("tag", "")).strip() or "unknown"
+                rid = str(res.get("id", "")).strip() or "?"
+                logger.warning(
+                    "Reaped GPU reservation %s with unknown age (tag=%s, ttl=%d min)",
+                    rid, tag, self.reservation_ttl_minutes,
+                )
+                continue
+            if age > self.reservation_ttl_minutes:
                 tag = str(res.get("tag", "")).strip() or "unknown"
                 rid = str(res.get("id", "")).strip() or "?"
                 logger.warning(

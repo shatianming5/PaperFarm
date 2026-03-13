@@ -261,7 +261,7 @@ class WorkerManager:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return None
         if not isinstance(data, dict):
             return None
@@ -403,7 +403,9 @@ class WorkerManager:
 
         def _stop() -> None:
             stop_event.set()
-            thread.join(timeout=2)
+            thread.join(timeout=5)
+            if thread.is_alive():
+                logger.warning("GPU telemetry monitor thread did not exit within timeout")
             _sample_once()
 
         return telemetry, _stop
