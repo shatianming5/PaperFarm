@@ -17,6 +17,12 @@ class PluginBase:
     name: str = ""
     dependencies: list[str] = []
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Prevent shared mutable default: each subclass gets its own list.
+        if "dependencies" not in cls.__dict__:
+            cls.dependencies = []
+
     async def start(self, kernel: Any) -> None:
         raise NotImplementedError
 
