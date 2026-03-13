@@ -50,6 +50,7 @@ dev = [
 
 [project.scripts]
 open-researcher = "open_researcher.cli:app"
+paperfarm = "open_researcher.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/open-researcher/open-researcher"
