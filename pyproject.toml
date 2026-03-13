@@ -52,6 +52,17 @@ dev = [
 open-researcher = "open_researcher.cli:app"
 paperfarm = "open_researcher.cli:app"
 
+[project.entry-points."open_researcher.plugins"]
+storage = "open_researcher.plugins.storage:StoragePlugin"
+graph = "open_researcher.plugins.graph"
+scheduler = "open_researcher.plugins.scheduler"
+agents = "open_researcher.plugins.agents:AgentsPlugin"
+orchestrator = "open_researcher.plugins.orchestrator:OrchestratorPlugin"
+execution = "open_researcher.plugins.execution:ExecutionPlugin"
+bootstrap = "open_researcher.plugins.bootstrap:BootstrapPlugin"
+cli = "open_researcher.plugins.cli:CLIPlugin"
+tui = "open_researcher.plugins.tui:TUIPlugin"
+
 [project.urls]
 Homepage = "https://github.com/open-researcher/open-researcher"
 Repository = "https://github.com/open-researcher/open-researcher"
