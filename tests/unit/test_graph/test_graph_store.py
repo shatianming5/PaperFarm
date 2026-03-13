@@ -68,3 +68,24 @@ async def test_add_and_list_evidence(graph_store):
     evs = await graph_store.list_evidence(hypothesis_id="h-001")
     assert len(evs) == 1
     assert evs[0]["direction"] == "supports"
+
+
+async def test_graph_plugin_lifecycle():
+    """GraphPlugin creates a GraphStore from StoragePlugin's database."""
+    from open_researcher.kernel import Kernel
+    from open_researcher.plugins.storage import StoragePlugin
+    from open_researcher.plugins.graph import GraphPlugin
+
+    storage = StoragePlugin(db_path=":memory:")
+    graph = GraphPlugin()
+
+    k = Kernel(db_path=":memory:")
+    await k.boot([storage, graph])
+
+    assert graph.store is not None
+    await graph.store.add_hypothesis(id="h-1", claim="Test", status="proposed")
+    h = await graph.store.get_hypothesis("h-1")
+    assert h["claim"] == "Test"
+
+    await k.shutdown()
+    assert graph.store is None

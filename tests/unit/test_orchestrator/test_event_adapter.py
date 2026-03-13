@@ -4,8 +4,6 @@ import asyncio
 import pytest
 from dataclasses import dataclass
 
-pytestmark = pytest.mark.asyncio
-
 
 def test_event_type_name_conversion():
     from open_researcher.plugins.orchestrator.event_adapter import _event_type_name
@@ -27,6 +25,7 @@ def test_event_type_name_conversion():
     assert _event_type_name(ManagerCycleStarted()) == "manager.cycle_started"
 
 
+@pytest.mark.asyncio
 async def test_bus_emitter_creates_kernel_events():
     from open_researcher.kernel import Kernel, Event
     from open_researcher.plugins.orchestrator.event_adapter import make_bus_emitter
@@ -50,6 +49,7 @@ async def test_bus_emitter_creates_kernel_events():
     await k.store.close()
 
 
+@pytest.mark.asyncio
 async def test_orchestrator_plugin_lifecycle():
     from open_researcher.kernel import Kernel
     from open_researcher.plugins.storage import StoragePlugin

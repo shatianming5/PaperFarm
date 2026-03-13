@@ -1,10 +1,6 @@
 """Tests for the orchestrator safety module."""
 import threading
 
-import pytest
-
-pytestmark = pytest.mark.asyncio
-
 
 def test_crash_counter_tracks_consecutive_crashes():
     from open_researcher.plugins.orchestrator.safety import CrashCounter

@@ -51,3 +51,23 @@ async def test_claim_respects_priority(pool):
     await pool.add(title="High", priority=10)
     claimed = await pool.claim(worker_id="w-1")
     assert claimed["title"] == "High"
+
+
+async def test_scheduler_plugin_lifecycle():
+    """SchedulerPlugin creates an IdeaPoolStore from StoragePlugin's database."""
+    from open_researcher.kernel import Kernel
+    from open_researcher.plugins.storage import StoragePlugin
+    from open_researcher.plugins.scheduler import SchedulerPlugin
+
+    storage = StoragePlugin(db_path=":memory:")
+    scheduler = SchedulerPlugin()
+
+    k = Kernel(db_path=":memory:")
+    await k.boot([storage, scheduler])
+
+    assert scheduler.pool is not None
+    idea = await scheduler.pool.add(title="Test idea", priority=5)
+    assert idea["status"] == "pending"
+
+    await k.shutdown()
+    assert scheduler.pool is None

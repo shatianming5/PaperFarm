@@ -54,8 +54,8 @@ paperfarm = "open_researcher.cli:app"
 
 [project.entry-points."open_researcher.plugins"]
 storage = "open_researcher.plugins.storage:StoragePlugin"
-graph = "open_researcher.plugins.graph"
-scheduler = "open_researcher.plugins.scheduler"
+graph = "open_researcher.plugins.graph:GraphPlugin"
+scheduler = "open_researcher.plugins.scheduler:SchedulerPlugin"
 agents = "open_researcher.plugins.agents:AgentsPlugin"
 orchestrator = "open_researcher.plugins.orchestrator:OrchestratorPlugin"
 execution = "open_researcher.plugins.execution:ExecutionPlugin"
