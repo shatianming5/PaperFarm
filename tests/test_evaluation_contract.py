@@ -5,7 +5,6 @@ from pathlib import Path
 from open_researcher.config import load_config
 from open_researcher.evaluation_contract import ensure_evaluation_contract, evaluation_doc_needs_backfill
 
-
 _PLACEHOLDER_EVAL = """# Evaluation Design
 
 > This file is filled by the AI agent during Phase 2.

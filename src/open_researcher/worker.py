@@ -680,7 +680,9 @@ class WorkerManager:
         return idea_ids, execution_ids, frontier_ids
 
     @staticmethod
-    def _reservation_matches_runtime(reservation: dict, *, idea_ids: set[str], execution_ids: set[str], frontier_ids: set[str]) -> bool:
+    def _reservation_matches_runtime(
+        reservation: dict, *, idea_ids: set[str], execution_ids: set[str], frontier_ids: set[str]
+    ) -> bool:
         idea_id = str(reservation.get("idea_id", "")).strip()
         execution_id = str(reservation.get("execution_id", "")).strip()
         frontier_id = str(reservation.get("frontier_id", "")).strip()
@@ -1014,7 +1016,9 @@ class WorkerManager:
                             else idea.get("resource_profile", "")
                         ).strip()
                         or str(idea.get("resource_profile", "")).strip(),
-                        saturation_mode=bool(getattr(allocation, "saturation_context", {}) if allocation is not None else {}),
+                        saturation_mode=bool(
+                            getattr(allocation, "saturation_context", {}) if allocation is not None else {}
+                        ),
                         gpu_budget_mb=(
                             int(getattr(allocation, "saturation_context", {}).get("gpu_budget_mb", 0) or 0)
                             if allocation is not None
@@ -1037,7 +1041,9 @@ class WorkerManager:
                     for line in workspace.log_lines if workspace is not None else []:
                         self.on_output(line)
                     workspace_snapshot = capture_clean_workspace_snapshot(workdir)
-                    saturation_context_path = self._write_saturation_context(idea, allocation) if allocation is not None else ""
+                    saturation_context_path = (
+                        self._write_saturation_context(idea, allocation) if allocation is not None else ""
+                    )
                     gpu_telemetry, stop_gpu_telemetry = self._start_gpu_telemetry_monitor(allocation)
 
                     if self._on_experiment_started is not None:

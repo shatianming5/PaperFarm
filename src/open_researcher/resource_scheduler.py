@@ -133,7 +133,8 @@ def normalize_resource_profiles(
         name = str(raw_name or "").strip()
         if not name or not isinstance(raw_profile, dict):
             continue
-        request_source = raw_profile.get("resource_request") if isinstance(raw_profile.get("resource_request"), dict) else raw_profile
+        rr = raw_profile.get("resource_request")
+        request_source = rr if isinstance(rr, dict) else raw_profile
         request = normalize_resource_request(
             request_source,
             gpu_hint=raw_profile.get("gpu_count"),

@@ -130,9 +130,11 @@ def _render_minimal_evaluation_doc(metric_name: str, direction: str, smoke_comma
         "## Secondary Metrics (Optional)\n\n"
         "| Metric | How to Extract | Purpose |\n"
         "|--------|---------------|---------|\n"
-        "| secondary_metrics | Read the `secondary_metrics` column from the newest `.research/results.tsv` row | Resource and stability context |\n\n"
+        "| secondary_metrics | Read the `secondary_metrics` column from the newest"
+        " `.research/results.tsv` row | Resource and stability context |\n\n"
         "## Baseline Method\n\n"
-        "- Use the first successful anchor/reproduction result row in `.research/results.tsv` as the baseline reference.\n"
+        "- Use the first successful anchor/reproduction result row in"
+        " `.research/results.tsv` as the baseline reference.\n"
     )
 
 

@@ -130,7 +130,7 @@ def install(
         try:
             import torch
             if not torch.cuda.is_available():
-                console.print(f"\n[yellow][WARN] This paper requires a GPU but CUDA is not available.[/yellow]")
+                console.print("\n[yellow][WARN] This paper requires a GPU but CUDA is not available.[/yellow]")
             elif min_vram:
                 vram = torch.cuda.get_device_properties(0).total_memory / 1e9
                 if vram < min_vram:
@@ -140,13 +140,13 @@ def install(
                     )
         except ImportError:
             if gpu_req == "required":
-                console.print(f"\n[yellow][WARN] GPU required but torch not installed — cannot check VRAM.[/yellow]")
+                console.print("\n[yellow][WARN] GPU required but torch not installed — cannot check VRAM.[/yellow]")
 
     # Step 1: install
     if not install_cmd:
         console.print("\n[yellow]No install_command in manifest — skipping install step.[/yellow]")
     else:
-        console.print(f"\n[bold]Step 1/2: Install[/bold]")
+        console.print("\n[bold]Step 1/2: Install[/bold]")
         console.print(f"  $ {install_cmd}")
         result = subprocess.run(install_cmd, shell=True)
         if result.returncode != 0:
@@ -160,12 +160,12 @@ def install(
             console.print("[yellow]No test_command in manifest — skipping smoke test.[/yellow]")
         raise typer.Exit(code=0)
 
-    console.print(f"\n[bold]Step 2/2: Smoke test[/bold]")
+    console.print("\n[bold]Step 2/2: Smoke test[/bold]")
 
     # Fetch smoke_test.py from Hub into a temp file
     folder = _get_folder(arxiv_id, registry)
     smoke_url = f"{registry}/hub/{folder}/smoke_test.py"
-    console.print(f"  Fetching smoke_test.py from Hub...")
+    console.print("  Fetching smoke_test.py from Hub...")
     try:
         with urllib.request.urlopen(smoke_url, timeout=10) as resp:
             smoke_src = resp.read().decode("utf-8")

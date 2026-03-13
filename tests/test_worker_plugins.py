@@ -17,7 +17,9 @@ class FakeGPUManager:
 
     def reserve(self, worker_id, request, metadata=None, preferred=None):
         target = preferred or {"host": self.rows[0]["host"], "device": self.rows[0]["device"]}
-        self.last_reserved = {"worker_id": worker_id, "request": dict(request), "metadata": metadata, "preferred": target}
+        self.last_reserved = {
+            "worker_id": worker_id, "request": dict(request), "metadata": metadata, "preferred": target
+        }
         return [
             {
                 "id": "res-001",
