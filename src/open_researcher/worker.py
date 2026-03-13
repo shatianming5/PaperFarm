@@ -15,7 +15,7 @@ from open_researcher.activity import ActivityMonitor
 from open_researcher.bootstrap import command_env_for_python, read_bootstrap_state
 from open_researcher.config import load_config
 from open_researcher.control_plane import consume_skip_current, read_control
-from open_researcher.git_safety import (
+from open_researcher.plugins.orchestrator.safety import (
     GitWorkspaceError,
     capture_clean_workspace_snapshot,
     ensure_clean_workspace,

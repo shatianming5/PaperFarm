@@ -13,10 +13,10 @@ from filelock import FileLock
 
 from open_researcher.activity import ActivityMonitor
 from open_researcher.config import ResearchConfig
-from open_researcher.crash_counter import CrashCounter
+from open_researcher.plugins.orchestrator.safety import CrashCounter
 from open_researcher.evaluation_contract import ensure_evaluation_contract
 from open_researcher.git_identity import ensure_local_git_identity
-from open_researcher.git_safety import (
+from open_researcher.plugins.orchestrator.safety import (
     GitWorkspaceError,
     capture_clean_workspace_snapshot,
     ensure_clean_workspace,
