@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import shlex
+import socket
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -115,16 +119,16 @@ def install(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
-    env_block = manifest.get("env", {})
-    install_cmd = env_block.get("install_command", "")
-    test_cmd = env_block.get("test_command", "")
+    env_block = manifest.get("env") if isinstance(manifest.get("env"), dict) else {}
+    install_cmd = str(env_block.get("install_command", "") or "").strip()
+    test_cmd = str(env_block.get("test_command", "") or "").strip()
 
     console.print(f"\n[bold]Hub install — {arxiv_id}[/bold]")
     console.print(manifest_summary(manifest))
 
     # Check hardware requirements
-    resources = manifest.get("resources", {})
-    gpu_req = resources.get("gpu", "none")
+    resources = manifest.get("resources") if isinstance(manifest.get("resources"), dict) else {}
+    gpu_req = str(resources.get("gpu", "none") or "none").strip()
     min_vram = resources.get("min_vram_gb")
     if gpu_req == "required":
         try:
@@ -148,7 +152,12 @@ def install(
     else:
         console.print("\n[bold]Step 1/2: Install[/bold]")
         console.print(f"  $ {install_cmd}")
-        result = subprocess.run(install_cmd, shell=True)
+        try:
+            argv = shlex.split(install_cmd)
+        except ValueError:
+            console.print("[red]Invalid install_command in manifest (cannot parse).[/red]")
+            raise typer.Exit(code=1)
+        result = subprocess.run(argv, timeout=600)
         if result.returncode != 0:
             console.print(f"[red]Install failed (exit {result.returncode}).[/red]")
             raise typer.Exit(code=result.returncode)
@@ -164,12 +173,13 @@ def install(
 
     # Fetch smoke_test.py from Hub into a temp file
     folder = _get_folder(arxiv_id, registry)
-    smoke_url = f"{registry}/hub/{folder}/smoke_test.py"
+    from urllib.parse import quote
+    smoke_url = f"{registry}/hub/{quote(folder, safe='')}/smoke_test.py"
     console.print("  Fetching smoke_test.py from Hub...")
     try:
         with urllib.request.urlopen(smoke_url, timeout=10) as resp:
             smoke_src = resp.read().decode("utf-8")
-    except Exception as exc:
+    except (urllib.error.HTTPError, urllib.error.URLError, socket.timeout, UnicodeDecodeError, OSError) as exc:
         console.print(f"[red]Failed to fetch smoke_test.py: {exc}[/red]")
         raise typer.Exit(code=1)
 
@@ -177,15 +187,24 @@ def install(
         tmp.write(smoke_src)
         tmp_path = tmp.name
 
-    smoke_argv = [sys.executable, tmp_path]
-    if live:
-        smoke_argv += ["--live", "--provider", provider]
+    try:
+        smoke_argv = [sys.executable, tmp_path]
+        if live:
+            smoke_argv += ["--live", "--provider", provider]
 
-    console.print(f"  $ {' '.join(smoke_argv[1:])}")
-    result = subprocess.run(smoke_argv)
-    if result.returncode != 0:
-        console.print(f"[red]Smoke test failed (exit {result.returncode}).[/red]")
-        raise typer.Exit(code=result.returncode)
+        console.print(f"  $ {' '.join(smoke_argv[1:])}")
+        result = subprocess.run(smoke_argv, timeout=300)
+        if result.returncode != 0:
+            console.print(f"[red]Smoke test failed (exit {result.returncode}).[/red]")
+            raise typer.Exit(code=result.returncode)
+    except subprocess.TimeoutExpired:
+        console.print("[red]Smoke test timed out after 300s.[/red]")
+        raise typer.Exit(code=124)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     console.print(f"\n[green]✅  Hub install complete for {arxiv_id}.[/green]")
     console.print(

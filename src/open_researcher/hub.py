@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -14,11 +16,21 @@ HUB_REGISTRY_URL = "https://raw.githubusercontent.com/XuanmiaoG/PaperFarm-Hub/ma
 def _fetch_json(url: str, timeout: int = 10) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            body = resp.read()
+            try:
+                text = body.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"Invalid encoding in response from {url}: {exc}") from exc
+            if not text.strip():
+                raise ValueError(f"Empty response from {url}")
+            return json.loads(text)
     except urllib.error.HTTPError as exc:
         raise ValueError(f"HTTP {exc.code}: {url}") from exc
     except urllib.error.URLError as exc:
-        raise ValueError(f"Network error fetching {url}: {exc.reason}") from exc
+        reason = getattr(exc, "reason", None) or str(exc)
+        raise ValueError(f"Network error fetching {url}: {reason}") from exc
+    except socket.timeout as exc:
+        raise ValueError(f"Timeout fetching {url} (timeout={timeout}s)") from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON at {url}: {exc}") from exc
 
@@ -29,7 +41,15 @@ def fetch_index(registry_url: str = HUB_REGISTRY_URL) -> dict[str, str]:
     entries = index.get("entries", {})
     # v2: entries is a list of dicts with arxiv_id + folder fields
     if isinstance(entries, list):
-        return {e["arxiv_id"]: e["folder"] for e in entries if "arxiv_id" in e and "folder" in e}
+        return {
+            str(e["arxiv_id"]): str(e["folder"])
+            for e in entries
+            if isinstance(e, dict)
+            and isinstance(e.get("arxiv_id"), str)
+            and isinstance(e.get("folder"), str)
+            and e["arxiv_id"]
+            and e["folder"]
+        }
     # v1: entries is a flat {arxiv_id: folder} dict
     if isinstance(entries, dict):
         return entries
@@ -57,8 +77,11 @@ def fetch_manifest(arxiv_id: str, registry_url: str = HUB_REGISTRY_URL) -> dict[
             f"arxiv_id {arxiv_id!r} not found in Hub index. "
             f"Available: {', '.join(sorted(index.keys()))}"
         )
-    url = f"{registry_url}/hub/{folder}/paperfarm.json"
-    return _fetch_json(url)
+    safe_folder = urllib.parse.quote(folder, safe="")
+    url = f"{registry_url}/hub/{safe_folder}/paperfarm.json"
+    manifest = _fetch_json(url)
+    manifest["_folder"] = folder
+    return manifest
 
 
 def manifest_to_bootstrap_overrides(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -68,7 +91,7 @@ def manifest_to_bootstrap_overrides(manifest: dict[str, Any]) -> dict[str, Any]:
     """
     overrides: dict[str, Any] = {}
 
-    env = manifest.get("env", {})
+    env = manifest.get("env") if isinstance(manifest.get("env"), dict) else {}
     if env.get("install_command"):
         overrides["install_command"] = env["install_command"]
     if env.get("test_command"):
@@ -76,7 +99,7 @@ def manifest_to_bootstrap_overrides(manifest: dict[str, Any]) -> dict[str, Any]:
     if env.get("python"):
         overrides["python"] = env["python"]
 
-    resources = manifest.get("resources", {})
+    resources = manifest.get("resources") if isinstance(manifest.get("resources"), dict) else {}
     if resources.get("gpu") == "required":
         overrides["requires_gpu"] = True
 
@@ -85,11 +108,15 @@ def manifest_to_bootstrap_overrides(manifest: dict[str, Any]) -> dict[str, Any]:
 
 def manifest_summary(manifest: dict[str, Any]) -> str:
     """Return a short human-readable summary of a manifest."""
-    paper = manifest.get("paper", {})
-    env = manifest.get("env", {})
-    resources = manifest.get("resources", {})
-    status = manifest.get("status", {})
-    agent = manifest.get("agent", {})
+    def _d(key: str) -> dict:
+        val = manifest.get(key)
+        return val if isinstance(val, dict) else {}
+
+    paper = _d("paper")
+    env = _d("env")
+    resources = _d("resources")
+    status = _d("status")
+    agent = _d("agent")
 
     lines = [
         f"  Title   : {paper.get('title', '?')}",
@@ -160,5 +187,21 @@ def apply_manifest_to_config_yaml(
         f"{manifest.get('_folder', '')}/paperfarm.json"
     )
 
-    config_path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True))
+    import os
+    import tempfile
+
+    content = yaml.dump(raw, default_flow_style=False, allow_unicode=True)
+    fd, tmp = tempfile.mkstemp(dir=str(config_path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(config_path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return overrides
