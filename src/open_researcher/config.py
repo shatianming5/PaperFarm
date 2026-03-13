@@ -62,6 +62,7 @@ class ResearchConfig:
     gpu_packing_signal: str = "memory_only"
     gpu_single_task_headroom_ratio: float = 0.10
     gpu_single_task_headroom_mb: int = 2048
+    gpu_reservation_ttl_minutes: int = 240
     resource_profiles: dict = field(default_factory=dict)
     role_agents: dict = field(default_factory=dict)
     agent_config: dict = field(default_factory=dict)
@@ -105,10 +106,10 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         _policy = "warn"
     return ResearchConfig(
         mode=raw.get("mode", "autonomous"),
-        timeout=exp.get("timeout", 600),
-        max_crashes=exp.get("max_consecutive_crashes", 3),
-        max_experiments=exp.get("max_experiments", 0),
-        max_workers=exp.get("max_parallel_workers", 0),
+        timeout=int(exp.get("timeout", 600) or 600),
+        max_crashes=int(exp.get("max_consecutive_crashes", 3) or 3),
+        max_experiments=int(exp.get("max_experiments", 0) or 0),
+        max_workers=int(exp.get("max_parallel_workers", 0) or 0),
         worker_agent=exp.get("worker_agent", ""),
         token_budget=max(int(exp.get("token_budget", 0) or 0), 0),
         budget_policy=_policy,
@@ -117,7 +118,7 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         primary_metric=metrics.get("name", ""),
         direction=metrics.get("direction", ""),
         web_search=research.get("web_search", True),
-        search_interval=research.get("search_interval", 5),
+        search_interval=int(research.get("search_interval", 5) or 5),
         remote_hosts=gpu.get("remote_hosts", []),
         enable_gpu_allocation=runtime.get("gpu_allocation", True),
         enable_failure_memory=runtime.get("failure_memory", True),
@@ -154,6 +155,7 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         gpu_packing_signal=str(gpu.get("packing_signal", "memory_only") or "memory_only"),
         gpu_single_task_headroom_ratio=max(float(gpu.get("single_task_headroom_ratio", 0.10) or 0.10), 0.0),
         gpu_single_task_headroom_mb=max(int(gpu.get("single_task_headroom_mb", 2048) or 2048), 0),
+        gpu_reservation_ttl_minutes=max(int(gpu.get("reservation_ttl_minutes", 240) or 240), 0),
         resource_profiles=resources.get("profiles", {}) if isinstance(resources.get("profiles", {}), dict) else {},
         role_agents=roles if isinstance(roles, dict) else {},
         agent_config=raw.get("agents", {}),

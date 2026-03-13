@@ -54,13 +54,20 @@ def detect_python_env(path: Path) -> str | None:
     Checks for virtual environments and system Python in order of preference.
     """
     # Check for venv/virtualenv
+    import sys
+    if sys.platform == "win32":
+        _venv_bin = "Scripts"
+        _python_name = "python.exe"
+    else:
+        _venv_bin = "bin"
+        _python_name = "python"
     for venv_dir in [".venv", "venv", "env"]:
-        python = path / venv_dir / "bin" / "python"
+        python = path / venv_dir / _venv_bin / _python_name
         if python.exists():
             return str(python)
 
     # Check for conda env
-    conda_python = path / "conda_env" / "bin" / "python"
+    conda_python = path / "conda_env" / _venv_bin / _python_name
     if conda_python.exists():
         return str(conda_python)
 

@@ -81,6 +81,7 @@ gpu:
   packing_signal: memory_only         # packing decision signal used by the scheduler
   single_task_headroom_ratio: 0.10    # keep this fraction of VRAM free in single_gpu_saturation mode
   single_task_headroom_mb: 2048       # never reserve less than this much headroom on one saturated GPU
+  reservation_ttl_minutes: 240        # auto-reap GPU reservations older than this (minutes); 0 = disabled
 
 resources:
   profiles: {}                        # optional repo-declared launch/resource shapes for the scheduler

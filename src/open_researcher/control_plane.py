@@ -147,33 +147,37 @@ def _replay_control_state_unlocked(
 
     ctrl = _default_control()
     event_count = 0
-    for line in events_path.read_text(encoding="utf-8").splitlines():
-        try:
-            record = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        if record.get("phase") != "control" or record.get("event") != "control_command":
-            continue
+    with events_path.open("r", encoding="utf-8") as _fh:
+        for line in _fh:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(record, dict):
+                continue
+            if record.get("phase") != "control" or record.get("event") != "control_command":
+                continue
 
-        event_count += 1
-        try:
-            seq = int(record.get("control_seq", 0))
-        except (TypeError, ValueError):
-            continue
-        command = str(record.get("command", "")).strip()
-        if command not in _VALID_COMMANDS:
-            continue
-        _apply_state(
-            ctrl,
-            command=command,  # type: ignore[arg-type]
-            seq=seq,
-            source=str(record.get("source", "unknown")),
-            reason=str(record.get("reason", "") or "") or None,
-            command_id=str(record.get("command_id", "") or "") or None,
-        )
-        ctrl["event_count"] = event_count
+            event_count += 1
+            try:
+                seq = int(record.get("control_seq", 0))
+            except (TypeError, ValueError):
+                continue
+            command = str(record.get("command", "")).strip()
+            if command not in _VALID_COMMANDS:
+                continue
+            _apply_state(
+                ctrl,
+                command=command,  # type: ignore[arg-type]
+                seq=seq,
+                source=str(record.get("source", "unknown")),
+                reason=str(record.get("reason", "") or "") or None,
+                command_id=str(record.get("command_id", "") or "") or None,
+            )
+            ctrl["event_count"] = event_count
 
     if event_count == 0:
         return snapshot if use_snapshot_fallback else _default_control()

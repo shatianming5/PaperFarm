@@ -456,8 +456,8 @@ def sort_pending_ideas(
                 (
                     0 if not backfill else 1,
                     -density,
-                    int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
-                    int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
+                    _safe_int(item.get("runtime_priority", item.get("priority", 9999)) or 9999, default=9999),
+                    _safe_int(item.get("manager_priority", item.get("priority", 9999)) or 9999, default=9999),
                     duration,
                     0 if request.get("shareable", True) else 1,
                     str(item.get("id", "")),

@@ -14,8 +14,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import logging
+
 from open_researcher.config import ResearchConfig
 from open_researcher.event_journal import now_iso
+
+logger = logging.getLogger(__name__)
 
 BOOTSTRAP_STATE_VERSION = "research-v1"
 PREPARE_LOG_NAME = "prepare.log"
@@ -73,15 +77,17 @@ def read_bootstrap_state(path: Path) -> dict:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        logger.warning("Corrupt bootstrap state file %s — resetting to defaults", path)
         payload = default_bootstrap_state(path.parent)
     if not isinstance(payload, dict):
         payload = default_bootstrap_state(path.parent)
     merged = default_bootstrap_state(path.parent)
-    merged.update({k: v for k, v in payload.items() if k in merged})
-    for key in ("repo_profile", "python_env", "install", "data", "smoke"):
+    _nested_keys = {"repo_profile", "python_env", "install", "data", "smoke"}
+    merged.update({k: v for k, v in payload.items() if k in merged and k not in _nested_keys})
+    for key in _nested_keys:
         value = payload.get(key, {})
         if isinstance(value, dict):
-            merged[key].update(value)
+            merged[key].update({k: v for k, v in value.items() if k in merged[key]})
     if isinstance(payload.get("expected_path_status"), list):
         merged["expected_path_status"] = [item for item in payload["expected_path_status"] if isinstance(item, dict)]
     if isinstance(payload.get("expected_paths"), list):
@@ -102,7 +108,21 @@ def write_bootstrap_state(path: Path, state: dict) -> None:
         if isinstance(state.get(key), dict):
             payload[key].update(state[key])
     payload["updated_at"] = now_iso()
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    import tempfile
+    content = json.dumps(payload, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def detect_repo_profile(repo_path: Path) -> dict:
@@ -169,7 +189,7 @@ def _extract_evaluation_command(path: Path) -> str:
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
-    blocks = re.findall(r"```(?:bash)?\n(.*?)```", content, flags=re.DOTALL)
+    blocks = re.findall(r"```(?:bash|sh)?\n(.*?)```", content, flags=re.DOTALL)
     for block in blocks:
         lines = [line.strip() for line in block.splitlines() if line.strip() and not line.strip().startswith("#")]
         command = "\n".join(lines).strip()
@@ -207,7 +227,7 @@ def _makefile_targets(workdir: Path) -> set[str]:
         if not line or line.startswith("\t") or ":" not in line:
             continue
         head = line.split(":", 1)[0].strip()
-        if head and " " not in head and not head.startswith("."):
+        if head and re.match(r"^[a-zA-Z0-9_-]+$", head):
             targets.add(head)
     return targets
 
@@ -323,6 +343,7 @@ def resolve_bootstrap_plan(repo_path: Path, research_dir: Path, cfg: ResearchCon
         unresolved.append("Could not infer a safe auto-prepare path for a non-Python repo.")
     if not smoke_command:
         unresolved.append("Smoke command is unresolved. Fill bootstrap.smoke_command or evaluation.md.")
+    # Note: smoke status is set below by _set_step_resolution; no early assignment needed.
     if missing_expected_paths and not data_command:
         detail = "Expected paths are missing but no data command was resolved: " + ", ".join(missing_expected_paths)
         if smoke_command:
@@ -333,8 +354,6 @@ def resolve_bootstrap_plan(repo_path: Path, research_dir: Path, cfg: ResearchCon
         errors.append("bootstrap.requires_gpu=true but nvidia-smi is not available.")
 
     install_status = "pending" if install_command else "skipped"
-    if unresolved and not smoke_command:
-        state["smoke"]["status"] = "unresolved"
     state.update(
         {
             "status": "resolved" if not errors and not unresolved else "unresolved",
@@ -523,21 +542,27 @@ def _append_prepare_log(
     *,
     env_mode: str | None = None,
 ) -> None:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n== {now_iso()} :: {step} ==\n")
-        handle.write(f"$ {command}\n")
-        if env_mode:
-            handle.write(f"[env_mode={env_mode}]\n")
-        if result.stdout:
-            handle.write(result.stdout)
-            if not result.stdout.endswith("\n"):
-                handle.write("\n")
-        if result.stderr:
-            handle.write(result.stderr)
-            if not result.stderr.endswith("\n"):
-                handle.write("\n")
-        handle.write(f"[exit_code={result.returncode}]\n")
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n== {now_iso()} :: {step} ==\n")
+            handle.write(f"$ {command}\n")
+            if env_mode:
+                handle.write(f"[env_mode={env_mode}]\n")
+            if result.stdout:
+                handle.write(result.stdout)
+                if not result.stdout.endswith("\n"):
+                    handle.write("\n")
+            if result.stderr:
+                handle.write(result.stderr)
+                if not result.stderr.endswith("\n"):
+                    handle.write("\n")
+            handle.write(f"[exit_code={result.returncode}]\n")
+    except OSError:
+        logger.warning("Failed to write prepare log to %s", log_path, exc_info=True)
+
+
+_PREPARE_COMMAND_TIMEOUT = 600  # seconds
 
 
 def _run_prepare_command(
@@ -548,15 +573,23 @@ def _run_prepare_command(
     env: dict[str, str],
     log_path: Path,
     env_mode: str = "project",
+    timeout: int = _PREPARE_COMMAND_TIMEOUT,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        shell=True,
-        cwd=str(working_dir),
-        text=True,
-        capture_output=True,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(working_dir),
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(
+            args=command, returncode=124,
+            stdout="", stderr=f"Command timed out after {timeout}s",
+        )
     _append_prepare_log(log_path, step_name, command, result, env_mode=env_mode)
     return result
 
@@ -572,7 +605,7 @@ def _try_smoke_preflight(
     state_path: Path,
     on_prepare_event=None,
 ) -> tuple[bool, bool, dict]:
-    step = state.get("smoke", {})
+    step = state.setdefault("smoke", {})
     command = str(step.get("command", "")).strip()
     if not command:
         return False, False, state
@@ -700,13 +733,18 @@ def _ensure_python_environment(repo_path: Path, state: dict, log_path: Path) -> 
         return 1, f"Resolved Python executable does not exist: {python_executable}"
 
     venv_dir = repo_path / ".venv"
-    result = subprocess.run(
-        [sys.executable, "-m", "venv", str(venv_dir)],
-        cwd=str(repo_path),
-        text=True,
-        capture_output=True,
-    )
-    _append_prepare_log(log_path, "python_env", f"{sys.executable} -m venv {venv_dir}", result)
+    venv_cmd = f"{sys.executable} -m venv {venv_dir}"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            cwd=str(repo_path),
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, f"Failed to create venv: {exc}"
+    _append_prepare_log(log_path, "python_env", venv_cmd, result)
     if result.returncode != 0:
         return result.returncode, "Failed to create .venv"
     return 0, ""
@@ -817,7 +855,7 @@ def run_bootstrap_prepare(
         return 1, state
 
     for step_name in _step_names():
-        step = state.get(step_name, {})
+        step = state.setdefault(step_name, {})
         command = str(step.get("command", "")).strip()
         if not command:
             step["status"] = "skipped"
@@ -843,14 +881,23 @@ def run_bootstrap_prepare(
         step["status"] = "running"
         step["started_at"] = now_iso()
         write_bootstrap_state(state_path, state)
-        result = _run_prepare_command(
-            step_name,
-            command,
-            working_dir=working_dir,
-            env=project_env,
-            log_path=log_path,
-            env_mode="project",
-        )
+        try:
+            result = _run_prepare_command(
+                step_name,
+                command,
+                working_dir=working_dir,
+                env=project_env,
+                log_path=log_path,
+                env_mode="project",
+            )
+        except Exception as exc:
+            step["status"] = "failed"
+            step["finished_at"] = now_iso()
+            step["detail"] = f"Unexpected error: {exc}"
+            state["status"] = "failed"
+            state["errors"] = [step["detail"]]
+            write_bootstrap_state(state_path, state)
+            raise
         step["finished_at"] = now_iso()
         if result.returncode != 0:
             step["status"] = "failed"

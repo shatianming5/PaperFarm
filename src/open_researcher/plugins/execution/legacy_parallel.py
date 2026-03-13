@@ -89,6 +89,7 @@ def build_parallel_worker_plugins(
             cfg.remote_hosts,
             allow_same_gpu_packing=cfg.gpu_allow_same_gpu_packing,
             allowed_local_devices=allowed_local_devices,
+            reservation_ttl_minutes=cfg.gpu_reservation_ttl_minutes,
         )
     plugins = WorkerRuntimePlugins(
         gpu_allocator=GPUAllocatorPlugin(
@@ -124,6 +125,7 @@ def estimate_parallel_frontier_target(research_dir: Path, cfg: ResearchConfig) -
         cfg.remote_hosts,
         allow_same_gpu_packing=cfg.gpu_allow_same_gpu_packing,
         allowed_local_devices=parse_visible_cuda_devices(os.environ.get("CUDA_VISIBLE_DEVICES", "")),
+        reservation_ttl_minutes=cfg.gpu_reservation_ttl_minutes,
     )
     allocator = GPUAllocatorPlugin(
         manager,

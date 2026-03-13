@@ -72,7 +72,10 @@ class FailureMemoryLedger:
             if not fix_action:
                 continue
             verification = str(row.get("verification_result", "")).strip().lower()
-            recovery_iterations = int(row.get("recovery_iterations", 1) or 1)
+            try:
+                recovery_iterations = max(int(row.get("recovery_iterations", 1) or 1), 1)
+            except (TypeError, ValueError):
+                recovery_iterations = 1
             entry = stats[fix_action]
             entry["fix_action"] = fix_action
             entry["attempt_count"] += 1

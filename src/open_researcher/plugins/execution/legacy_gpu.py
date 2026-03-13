@@ -8,6 +8,7 @@ GPU manager used by the original research loop.  The simplified
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import uuid
@@ -19,9 +20,35 @@ from filelock import FileLock
 
 from open_researcher.plugins.storage.file_ops import atomic_write_json
 
+logger = logging.getLogger(__name__)
+
+# Default TTL for GPU reservations: 4 hours.  Reservations older than this
+# are considered stale (e.g. from a crashed worker) and automatically cleaned
+# up during refresh().  Set to 0 to disable TTL reaping.
+DEFAULT_RESERVATION_TTL_MINUTES = 240
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _reservation_age_minutes(reservation: dict) -> float | None:
+    """Return the age of a reservation in minutes, or None if unknown."""
+    started = str(reservation.get("started_at", "") or "").strip()
+    if not started:
+        return None
+    try:
+        # Normalise trailing 'Z' (UTC shorthand) that older Python versions
+        # (<3.11) cannot parse via fromisoformat().
+        if started.endswith("Z"):
+            started = started[:-1] + "+00:00"
+        started_dt = datetime.fromisoformat(started)
+        if started_dt.tzinfo is None:
+            started_dt = started_dt.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - started_dt
+        return delta.total_seconds() / 60.0
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def parse_visible_cuda_devices(value: Any) -> frozenset[int] | None:
@@ -52,10 +79,12 @@ class GPUManager:
         *,
         allow_same_gpu_packing: bool = True,
         allowed_local_devices: Iterable[int] | None = None,
+        reservation_ttl_minutes: int = DEFAULT_RESERVATION_TTL_MINUTES,
     ):
         self.status_file = status_file
         self.remote_hosts = remote_hosts or []
         self.allow_same_gpu_packing = allow_same_gpu_packing
+        self.reservation_ttl_minutes = max(int(reservation_ttl_minutes or 0), 0)
         inferred_scope = (
             parse_visible_cuda_devices(os.environ.get("CUDA_VISIBLE_DEVICES", ""))
             if allowed_local_devices is None
@@ -198,6 +227,24 @@ class GPUManager:
             return []
         return self._parse_nvidia_smi(result.stdout, host=host)
 
+    def _reap_stale_reservations(self, reservations: list[dict]) -> list[dict]:
+        """Remove reservations that exceed the configured TTL."""
+        if self.reservation_ttl_minutes <= 0:
+            return reservations
+        kept: list[dict] = []
+        for res in reservations:
+            age = _reservation_age_minutes(res)
+            if age is not None and age > self.reservation_ttl_minutes:
+                tag = str(res.get("tag", "")).strip() or "unknown"
+                rid = str(res.get("id", "")).strip() or "?"
+                logger.warning(
+                    "Reaped stale GPU reservation %s (tag=%s, age=%.0f min, ttl=%d min)",
+                    rid, tag, age, self.reservation_ttl_minutes,
+                )
+                continue
+            kept.append(res)
+        return kept
+
     def refresh(self) -> list[dict]:
         all_gpus = self.detect_local()
         for rh in self.remote_hosts:
@@ -207,16 +254,30 @@ class GPUManager:
                 continue
         with self._lock:
             old = self._read()
-            old_reservations = {
-                (g["host"], g["device"]): g.get("reservations", [])
+            old_by_key: dict[tuple[str, int], dict] = {
+                (str(g.get("host", "local")), int(g.get("device", 0))): g
                 for g in old.get("gpus", [])
                 if isinstance(g, dict)
             }
+            refreshed_keys: set[tuple[str, int]] = set()
             merged = []
             for gpu in all_gpus:
                 key = (gpu["host"], gpu["device"])
-                gpu["reservations"] = old_reservations.get(key, [])
+                refreshed_keys.add(key)
+                old_gpu = old_by_key.get(key)
+                gpu["reservations"] = self._reap_stale_reservations(
+                    old_gpu.get("reservations", []) if old_gpu else []
+                )
                 merged.append(self._normalize_gpu_row(gpu))
+            # Preserve GPUs from previous state that were not refreshed (e.g.
+            # remote hosts that timed out) so their reservations are not lost.
+            for key, old_gpu in old_by_key.items():
+                if key in refreshed_keys:
+                    continue
+                old_gpu["reservations"] = self._reap_stale_reservations(
+                    old_gpu.get("reservations", [])
+                )
+                merged.append(self._normalize_gpu_row(old_gpu))
             self._write({"gpus": merged})
         return merged
 

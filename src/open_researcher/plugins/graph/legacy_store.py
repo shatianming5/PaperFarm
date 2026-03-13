@@ -485,11 +485,22 @@ class ResearchGraphStore:
         return normalized
 
     def _frontier_sort_key(self, item: dict) -> tuple:
+        def _safe(val: object, default: int = 9999) -> int:
+            try:
+                return int(val)
+            except (TypeError, ValueError):
+                return default
+
+        try:
+            density = float(item.get("utility_density", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            density = 0.0
+
         return (
             0 if not bool(item.get("backfill_candidate", False)) else 1,
-            -float(item.get("utility_density", 0.0) or 0.0),
-            int(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
-            int(item.get("manager_priority", item.get("priority", 9999)) or 9999),
+            -density,
+            _safe(item.get("runtime_priority", item.get("priority", 9999)) or 9999),
+            _safe(item.get("manager_priority", item.get("priority", 9999)) or 9999),
             normalize_expected_duration_minutes(item.get("expected_duration_minutes")),
             str(item.get("id", "")),
         )

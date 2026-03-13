@@ -9,7 +9,6 @@ import csv
 import json
 import threading
 import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from filelock import FileLock
@@ -25,7 +24,6 @@ from open_researcher.plugins.orchestrator.safety import (
     ensure_clean_workspace,
     rollback_workspace,
 )
-from open_researcher.graph_context import enforce_context_token_limit, filter_graph_for_context
 from open_researcher.plugins.execution.legacy_parallel import estimate_parallel_frontier_target
 from open_researcher.phase_gate import PhaseGate
 from open_researcher.kernel.events import (
@@ -65,6 +63,7 @@ from open_researcher.token_tracking import (
     BudgetCheckResult,
     TokenLedger,
     TokenMetrics,
+    load_ledger,
     save_ledger,
 )
 from open_researcher.watchdog import TimeoutWatchdog
@@ -133,7 +132,7 @@ class ResearchLoop:
         self.last_experiments_completed = 0
         self.had_experiment_failure = False
         self.last_experiment_failure_code: int | None = None
-        self.token_ledger = TokenLedger()
+        self.token_ledger = load_ledger(self.research_dir / "token_ledger.json")
 
     def _effective_max_experiments(self, override: int | None = None) -> int:
         if override is not None and override > 0:
@@ -205,27 +204,6 @@ class ResearchLoop:
             msg = f"Token budget exceeded ({self.token_ledger.cumulative.tokens_total:,} tokens)"
             self._pause(self.research_dir, msg)
         return None
-
-    @contextmanager
-    def _pruned_graph_context(self, graph_store):
-        """Temporarily replace research_graph.json with a pruned version for agent consumption."""
-        if self.cfg.context_token_limit <= 0:
-            yield
-            return
-        graph_path = graph_store.path
-        backup_path = graph_path.with_suffix(".json.bak")
-        try:
-            full_graph = graph_store.read()
-            filtered = filter_graph_for_context(full_graph)
-            filtered = enforce_context_token_limit(filtered, self.cfg.context_token_limit)
-            import shutil
-            shutil.copy2(graph_path, backup_path)
-            atomic_write_json(graph_path, filtered)
-            yield
-        finally:
-            if backup_path.exists():
-                import shutil
-                shutil.move(str(backup_path), str(graph_path))
 
     def _run_agent(
         self, agent, *, phase: str, program_file: str, error_tag: str, env: dict[str, str] | None = None
@@ -434,7 +412,7 @@ class ResearchLoop:
             ctrl = self._read_control_state()
             if not bool(ctrl.get("paused", False)):
                 return True
-            time.sleep(0.2)
+            stop_event.wait(timeout=0.5)
         return False
 
     def _consume_skip_current(self, *, source: str) -> bool:
@@ -737,9 +715,9 @@ class ResearchLoop:
                 with lock:
                     self.token_ledger.record(metrics, phase="experimenting", experiment_num=run_num)
                     save_ledger(self.token_ledger, self.research_dir / "token_ledger.json")
-                budget_remaining = None
-                if self.cfg.token_budget > 0:
-                    budget_remaining = max(0, self.cfg.token_budget - self.token_ledger.cumulative.tokens_total)
+                    budget_remaining = None
+                    if self.cfg.token_budget > 0:
+                        budget_remaining = max(0, self.cfg.token_budget - self.token_ledger.cumulative.tokens_total)
                 self.emit(TokenMetricsUpdated(
                     phase="experimenting",
                     experiment_num=run_num,
@@ -832,6 +810,7 @@ class ResearchLoop:
         finished_all = False
 
         while not stop_event.is_set():
+            stop_reason = None
             control_action = self._enforce_runtime_controls(
                 stop_event,
                 allow_skip=False,

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 
 from open_researcher.token_tracking import estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = frozenset({"rejected", "archived"})
 
@@ -20,18 +23,18 @@ def filter_graph_for_context(graph: dict) -> dict:
     filtered["frontier"] = active_frontier
 
     # Derive referenced hypothesis/spec IDs from active frontier
-    active_hyp_ids = {f.get("hypothesis_id") for f in active_frontier}
-    active_spec_ids = {f.get("spec_id") for f in active_frontier}
+    active_hyp_ids = {f.get("hypothesis_id") for f in active_frontier} - {None}
+    active_spec_ids = {f.get("spec_id") for f in active_frontier} - {None}
 
     # IDs of hypotheses that have ANY frontier link (active or terminal)
-    all_frontier_hyp_ids = {f.get("hypothesis_id") for f in all_frontier}
+    all_frontier_hyp_ids = {f.get("hypothesis_id") for f in all_frontier} - {None}
 
     # Keep hypotheses referenced by active frontier OR not linked to any frontier
     filtered["hypotheses"] = [
         h for h in graph.get("hypotheses", [])
         if h.get("id") in active_hyp_ids or h.get("id") not in all_frontier_hyp_ids
     ]
-    referenced_hyp_ids = {h["id"] for h in filtered["hypotheses"]}
+    referenced_hyp_ids = {h.get("id") for h in filtered["hypotheses"]} - {None}
 
     # Keep evidence linked to referenced hypotheses
     filtered["evidence"] = [
@@ -100,10 +103,22 @@ def enforce_context_token_limit(graph: dict, limit: int) -> dict:
         return trimmed
 
     # Step 4: Keep only frontier-referenced specs
-    frontier_spec_ids = {f.get("spec_id") for f in trimmed.get("frontier", [])}
+    frontier_spec_ids = {f.get("spec_id") for f in trimmed.get("frontier", [])} - {None}
     trimmed["experiment_specs"] = [
         s for s in trimmed.get("experiment_specs", [])
         if s.get("id") in frontier_spec_ids
     ]
+
+    if _estimate_graph_tokens(trimmed) <= limit:
+        return trimmed
+
+    # Step 5: Remove all evidence as last resort
+    trimmed["evidence"] = []
+
+    if _estimate_graph_tokens(trimmed) > limit:
+        logger.warning(
+            "Graph still exceeds token limit (%d) after all pruning steps",
+            limit,
+        )
 
     return trimmed

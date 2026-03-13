@@ -918,6 +918,7 @@ class WorkerManager:
 
     def _worker_loop(self, worker_id: int, gpu: dict | None) -> None:
         wid = f"worker-{worker_id}"
+        allocation = None
         try:
             while not self._should_stop():
                 if not self._wait_until_unpaused():
@@ -1371,6 +1372,15 @@ class WorkerManager:
             self._record_fatal_error()
             self.on_output(f"[{wid}] Fatal worker error: {exc}")
             logger.debug("Fatal worker loop error", exc_info=True)
+            # Best-effort GPU release for the current allocation before stopping.
+            try:
+                if self._plugins.gpu_allocator is not None and allocation is not None:
+                    self._plugins.gpu_allocator.release(allocation)
+                    self.on_output(f"[{wid}] Released GPU after fatal error")
+            except Exception:
+                logger.debug("GPU release in fatal error handler failed", exc_info=True)
+            finally:
+                self._release_claim_slot()
             self.stop()
         finally:
             self._activity.remove_worker("experiment_agent", wid)

@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from open_researcher.config import ResearchConfig
+from open_researcher.plugins.storage.file_ops import atomic_write_text
 
 _PLACEHOLDER_MARKERS = (
     "<!-- e.g.",
@@ -158,7 +159,7 @@ def _update_config_metrics(config_path: Path, metric_name: str, direction: str) 
         primary["direction"] = direction
         changed = True
     if changed:
-        config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        atomic_write_text(config_path, yaml.safe_dump(payload, sort_keys=False))
     return changed
 
 
@@ -186,9 +187,9 @@ def ensure_evaluation_contract(
     evaluation_path = research_dir / "evaluation.md"
     updated_evaluation = False
     if metric_name and direction and evaluation_doc_needs_backfill(evaluation_path):
-        evaluation_path.write_text(
+        atomic_write_text(
+            evaluation_path,
             _render_minimal_evaluation_doc(metric_name, direction, smoke_command),
-            encoding="utf-8",
         )
         updated_evaluation = True
 

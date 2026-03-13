@@ -489,7 +489,7 @@ class GPUAllocatorPlugin:
         try:
             self.manager.release_reservations(allocation.reservations)
         except Exception:
-            logger.debug("GPU release failed", exc_info=True)
+            logger.warning("GPU release failed — reservation may be stale until TTL reap", exc_info=True)
 
 
 @dataclass(slots=True)

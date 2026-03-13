@@ -42,8 +42,9 @@ def reset_runtime_session_state(research_dir: Path, *, source: str) -> dict[str,
         workers = experiment_entry.get("workers")
         if isinstance(workers, list):
             stale_workers = len(workers)
-        activity.clear_workers("experiment_agent", status="idle", detail="0 active worker(s)", idea="")
-        cleared_workers = True
+        if stale_workers > 0:
+            activity.clear_workers("experiment_agent", status="idle", detail="0 active worker(s)", idea="")
+            cleared_workers = True
 
     final_state = read_control(ctrl_path)
     changed = resumed or cleared_skip or cleared_workers

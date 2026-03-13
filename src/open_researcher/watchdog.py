@@ -1,7 +1,10 @@
 """Timeout watchdog -- kill agent if experiment exceeds time limit."""
 
+import logging
 import threading
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 class TimeoutWatchdog:
@@ -33,7 +36,7 @@ class TimeoutWatchdog:
         try:
             self.on_timeout()
         except Exception:
-            pass
+            logger.exception("Watchdog on_timeout callback failed")
 
     def _cancel_timer(self) -> None:
         if self._timer:

@@ -1,6 +1,7 @@
 """Phase gate -- pause for human review in collaborative mode."""
 
 import json
+import threading
 from pathlib import Path
 
 from open_researcher.control_plane import issue_control_command
@@ -11,6 +12,7 @@ class PhaseGate:
         self.research_dir = research_dir
         self.mode = mode
         self._last_phase = self._read_phase()
+        self._lock = threading.Lock()
 
     def _read_phase(self) -> str:
         path = self.research_dir / "experiment_progress.json"
@@ -23,12 +25,13 @@ class PhaseGate:
 
     def check(self) -> str | None:
         """Check for phase transition. Returns new phase if paused, else None."""
-        current = self._read_phase()
-        if current != self._last_phase:
-            self._last_phase = current
-            if self.mode == "collaborative":
-                self._pause(current)
-                return current
+        with self._lock:
+            current = self._read_phase()
+            if current != self._last_phase:
+                self._last_phase = current
+                if self.mode == "collaborative":
+                    self._pause(current)
+                    return current
         return None
 
     def _pause(self, phase: str) -> None:

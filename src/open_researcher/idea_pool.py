@@ -62,7 +62,11 @@ class IdeaBacklog:
 
     def _finalize_terminal_status(self, idea: dict) -> None:
         idea["finished_at"] = datetime.now(timezone.utc).isoformat()
-        self._clear_parallel_runtime_state(idea)
+        ct = idea.get("claim_token")
+        if ct is not None:
+            idea["finished_claim_token"] = ct
+            idea["finished_claim_token_seq"] = idea.get("claim_token_seq")
+        self._clear_live_parallel_runtime_state(idea)
 
     def _clear_terminal_status(self, idea: dict) -> None:
         idea.pop("finished_at", None)
@@ -139,11 +143,11 @@ class IdeaBacklog:
             for idea in data["ideas"]:
                 if idea["id"] == idea_id:
                     idea["status"] = status
-                    self._clear_parallel_runtime_state(idea)
                     if status in {"done", "skipped"}:
                         self._finalize_terminal_status(idea)
-                    elif status == "pending":
+                    else:
                         self._clear_terminal_status(idea)
+                        self._clear_live_parallel_runtime_state(idea)
                     return True
             return False
 
@@ -165,8 +169,10 @@ class IdeaBacklog:
             for idea in data["ideas"]:
                 if idea["id"] != idea_id:
                     continue
-                if claim_token is not None and str(idea.get("claim_token") or "") != str(claim_token):
-                    return False
+                if claim_token is not None:
+                    current = str(idea.get("claim_token") or idea.get("finished_claim_token") or "")
+                    if current != str(claim_token):
+                        return False
                 idea["status"] = "done"
                 idea["result"] = {"metric_value": metric_value, "verdict": verdict}
                 if isinstance(resource_observation, dict) and resource_observation:
@@ -307,15 +313,17 @@ class IdeaPool(IdeaBacklog):
             for idea in data["ideas"]:
                 if idea["id"] != idea_id:
                     continue
-                if claim_token is not None and str(idea.get("claim_token") or "") != str(claim_token):
-                    return False
+                if claim_token is not None:
+                    current = str(idea.get("claim_token") or idea.get("finished_claim_token") or "")
+                    if current != str(claim_token):
+                        return False
                 idea["status"] = "done"
                 idea["result"] = {"metric_value": metric_value, "verdict": verdict}
                 if isinstance(resource_observation, dict) and resource_observation:
                     idea["resource_observation"] = copy.deepcopy(resource_observation)
                 idea["finished_at"] = datetime.now(timezone.utc).isoformat()
-                idea["finished_claim_token"] = idea.get("claim_token")
-                idea["finished_claim_token_seq"] = idea.get("claim_token_seq")
+                idea["finished_claim_token"] = idea.get("claim_token") or idea.get("finished_claim_token")
+                idea["finished_claim_token_seq"] = idea.get("claim_token_seq") or idea.get("finished_claim_token_seq")
                 self._clear_live_parallel_runtime_state(idea)
                 return True
             return False
