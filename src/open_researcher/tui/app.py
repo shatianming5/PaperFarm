@@ -184,6 +184,12 @@ class ResearchApp(App):
     }
 
     def _save_ui_state(self) -> None:
+        """Schedule a debounced UI state save (avoids disk writes on every highlight)."""
+        if hasattr(self, "_ui_save_timer") and self._ui_save_timer is not None:
+            self._ui_save_timer.stop()
+        self._ui_save_timer = self.set_timer(0.5, self._do_save_ui_state)
+
+    def _do_save_ui_state(self) -> None:
         state_path = self.research_dir / self._UI_STATE_FILE
         try:
             active_tab = self.query_one("#tabs", TabbedContent).active
@@ -217,6 +223,14 @@ class ResearchApp(App):
             logger.debug("Tab %s not found", tab_id)
             return
         self._save_ui_state()
+        # Immediately update hotkey bar so available keys are accurate
+        try:
+            paused = self._dashboard_cache.session.paused if self._dashboard_cache else False
+            self.query_one("#hotkey-bar", HotkeyBar).update_state(
+                paused=paused, phase=self.app_phase, active_tab=tab_id,
+            )
+        except NoMatches:
+            pass
         # Transfer focus to the primary interactive widget in the target tab
         target = self._TAB_FOCUS_TARGETS.get(tab_id)
         if target:
@@ -247,9 +261,12 @@ class ResearchApp(App):
             logger.debug("Doc viewer not mounted", exc_info=True)
 
     def on_projected_backlog_panel_frontier_requested(self, event: FrontierFocusPanel.FrontierRequested) -> None:
-        self._apply_frontier_selection(event.frontier_id)
+        # sync_list=False: the OptionList already has the correct highlight
+        # from the user's own navigation — no need to set it again, which
+        # would create a highlight→sync→highlight feedback loop and flicker.
+        self._apply_frontier_selection(event.frontier_id, sync_list=False)
 
-    def _apply_frontier_selection(self, frontier_id: str) -> None:
+    def _apply_frontier_selection(self, frontier_id: str, *, sync_list: bool = True) -> None:
         self.selected_frontier_id = str(frontier_id or "").strip()
         self._save_ui_state()
         if not self.selected_frontier_id or self._dashboard_cache is None:
@@ -258,7 +275,8 @@ class ResearchApp(App):
             self.query_one("#frontier-detail", FrontierDetailPanel).update_detail(
                 self._dashboard_cache.frontier_details.get(self.selected_frontier_id)
             )
-            self.query_one("#frontier-focus", FrontierFocusPanel).sync_selection(self.selected_frontier_id)
+            if sync_list:
+                self.query_one("#frontier-focus", FrontierFocusPanel).sync_selection(self.selected_frontier_id)
         except NoMatches:
             logger.debug("Frontier detail widgets not mounted", exc_info=True)
 
@@ -509,6 +527,9 @@ class ResearchApp(App):
         self.notify("Resumed", severity="information")
 
     def action_skip(self) -> None:
+        if self.app_phase != "experimenting":
+            self.notify("Skip only available during experimenting", severity="warning")
+            return
         if self._dashboard_cache and self._dashboard_cache.session.skip_current:
             self.notify("Skip already queued", severity="warning")
             return
@@ -516,6 +537,9 @@ class ResearchApp(App):
         self.notify("Skip queued", severity="information")
 
     def action_clear_skip(self) -> None:
+        if self.app_phase != "experimenting":
+            self.notify("Skip only available during experimenting", severity="warning")
+            return
         self._write_control_command("clear_skip")
         self.notify("Skip cancelled", severity="information")
 
@@ -543,7 +567,9 @@ class ResearchApp(App):
             doc_viewer = self.query_one("#doc-viewer", DocViewer)
             idx = DocViewer.DOC_FILES.index(doc_viewer.current_file) if doc_viewer.current_file in DocViewer.DOC_FILES else -1
             next_idx = (idx + 1) % len(DocViewer.DOC_FILES)
-            await doc_viewer.select_doc(DocViewer.DOC_FILES[next_idx])
+            target = DocViewer.DOC_FILES[next_idx]
+            await doc_viewer.select_doc(target)
+            self.query_one("#docs-sidebar", DocsSidebarPanel).sync_selection(target)
         except (NoMatches, Exception):
             pass
 
@@ -555,7 +581,9 @@ class ResearchApp(App):
             doc_viewer = self.query_one("#doc-viewer", DocViewer)
             idx = DocViewer.DOC_FILES.index(doc_viewer.current_file) if doc_viewer.current_file in DocViewer.DOC_FILES else 0
             prev_idx = (idx - 1) % len(DocViewer.DOC_FILES)
-            await doc_viewer.select_doc(DocViewer.DOC_FILES[prev_idx])
+            target = DocViewer.DOC_FILES[prev_idx]
+            await doc_viewer.select_doc(target)
+            self.query_one("#docs-sidebar", DocsSidebarPanel).sync_selection(target)
         except (NoMatches, Exception):
             pass
 

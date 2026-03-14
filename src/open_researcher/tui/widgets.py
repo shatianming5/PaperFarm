@@ -474,9 +474,31 @@ class ProjectedBacklogPanel(Static):
             )
             self.query_one("#frontier-header", Static).update(header)
             option_list = self.query_one("#frontier-options", OptionList)
-            option_list.set_options(options)
-            option_list.highlighted = 0 if options else None
-            self._update_active(frontiers[0].frontier_id)
+
+            # Skip full reset if the option IDs haven't changed — avoids
+            # flickering the highlighted row during periodic refreshes.
+            new_ids = [o.id for o in options]
+            old_ids = [o.id for o in option_list.options] if option_list.option_count else []
+            if new_ids != old_ids:
+                # Remember the currently highlighted frontier so we can
+                # restore it after replacing the option set.
+                prev_highlighted = None
+                if option_list.highlighted is not None and 0 <= option_list.highlighted < option_list.option_count:
+                    prev_highlighted = option_list.options[option_list.highlighted].id
+                option_list.set_options(options)
+                # Restore previous highlight position if it still exists,
+                # otherwise fall back to the first option.
+                restored = False
+                if prev_highlighted:
+                    for idx, opt in enumerate(options):
+                        if opt.id == prev_highlighted:
+                            option_list.highlighted = idx
+                            restored = True
+                            break
+                if not restored:
+                    option_list.highlighted = 0 if options else None
+                    self._update_active(frontiers[0].frontier_id)
+            # If IDs unchanged, leave the OptionList (and its highlight) alone.
         except Exception:
             logger.debug("Error updating frontier panel", exc_info=True)
 
@@ -534,7 +556,11 @@ class FrontierFocusPanel(ProjectedBacklogPanel):
             return
         for index, option in enumerate(option_list.options):
             if option.id == frontier_id:
-                option_list.highlighted = index
+                # Only set highlighted if it actually needs to change —
+                # avoids re-triggering OptionHighlighted events and the
+                # resulting visual flicker.
+                if option_list.highlighted != index:
+                    option_list.highlighted = index
                 self._update_active(frontier_id)
                 return
 
@@ -1010,11 +1036,18 @@ class DocsSidebarPanel(Static):
             except Exception:
                 logger.debug("Error updating empty docs sidebar", exc_info=True)
             return
+
+        # Skip full rebuild if the doc list and current file haven't changed
+        new_ids = [item.filename for item in items]
+        old_ids = [item.filename for item in self._all_items]
+        if new_ids == old_ids and current_file == self._current_file:
+            return
+
         self._all_items = list(items)
         self._doc_index = {item.filename: item for item in items}
         self._current_file = current_file
         self._remember_recent(current_file)
-        header_text = f"[bold {C_TEXT}]Docs Navigator[/]\n[{C_DIM}]Click or press Enter to open a document[/]"
+        header_text = f"[bold {C_TEXT}]Docs Navigator[/]\n[{C_DIM}]Navigate with arrow keys to browse documents[/]"
         lines = [f"[bold {C_TEXT}]Docs Navigator[/]"]
         for item in items:
             active = item.filename == current_file
@@ -1130,13 +1163,36 @@ class DocsSidebarPanel(Static):
         self._render_recent()
         self._update_preview(self._current_file)
 
+    def sync_selection(self, filename: str) -> None:
+        """Sync the highlighted option to match the given filename."""
+        if not filename:
+            return
+        try:
+            option_list = self.query_one("#docs-options", OptionList)
+        except Exception:
+            return
+        for index, option in enumerate(option_list.options):
+            if option.id == filename:
+                if option_list.highlighted != index:
+                    option_list.highlighted = index
+                self._current_file = filename
+                self._update_preview(filename)
+                return
+
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_id:
+            event.stop()
+            self._current_file = event.option_id
+            self._remember_recent(event.option_id)
             self._update_preview(event.option_id)
+            self.post_message(self.DocRequested(self, event.option_id))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_id:
+            event.stop()
             self._current_file = event.option_id
+            self._remember_recent(event.option_id)
+            self._update_preview(event.option_id)
             self.post_message(self.DocRequested(self, event.option_id))
 
 
