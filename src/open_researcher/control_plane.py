@@ -187,7 +187,7 @@ def _replay_control_state_unlocked(
 def read_control(ctrl_path: Path) -> dict:
     """Read control state derived from the event log, with snapshot fallback."""
     events_path = _event_log_path(ctrl_path)
-    lock = FileLock(str(events_path) + ".lock")
+    lock = FileLock(str(events_path) + ".lock", timeout=10)
     with lock:
         ctrl = _replay_control_state_unlocked(
             ctrl_path,
@@ -263,7 +263,7 @@ def apply_control_command(
 ) -> dict:
     """Apply a command with an explicit sequence id under lock."""
     events_path = _event_log_path(ctrl_path)
-    lock = FileLock(str(events_path) + ".lock")
+    lock = FileLock(str(events_path) + ".lock", timeout=10)
     with lock:
         ctrl = _replay_control_state_unlocked(
             ctrl_path,
@@ -307,7 +307,7 @@ def issue_control_command(
 ) -> dict:
     """Issue the next monotonic command id and apply atomically."""
     events_path = _event_log_path(ctrl_path)
-    lock = FileLock(str(events_path) + ".lock")
+    lock = FileLock(str(events_path) + ".lock", timeout=10)
     with lock:
         ctrl = _replay_control_state_unlocked(
             ctrl_path,
@@ -345,7 +345,7 @@ def issue_control_command(
 def consume_skip_current(ctrl_path: Path, *, source: str) -> bool:
     """Atomically clear a pending skip_current flag and record the clear event."""
     events_path = _event_log_path(ctrl_path)
-    lock = FileLock(str(events_path) + ".lock")
+    lock = FileLock(str(events_path) + ".lock", timeout=10)
     with lock:
         ctrl = _replay_control_state_unlocked(
             ctrl_path,

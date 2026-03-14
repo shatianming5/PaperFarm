@@ -565,11 +565,13 @@ class FrontierFocusPanel(ProjectedBacklogPanel):
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_id:
+            event.stop()
             self._update_active(event.option_id)
             self.post_message(self.FrontierRequested(self, event.option_id))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_id:
+            event.stop()
             self._update_active(event.option_id)
             self.post_message(self.FrontierRequested(self, event.option_id))
 
@@ -1481,6 +1483,7 @@ class DocViewer(Static):
         self._current_file: str = self.DEFAULT_FILE
         self._last_mtime: float = 0.0
         self._last_content_hash: int = 0
+        self._refresh_timer = None
 
     def compose(self) -> ComposeResult:
         from textual.widgets import Markdown as MarkdownWidget
@@ -1492,7 +1495,12 @@ class DocViewer(Static):
 
     async def on_mount(self) -> None:
         await self._load_doc(self.DEFAULT_FILE)
-        self.set_interval(5.0, self._schedule_refresh)
+        self._refresh_timer = self.set_interval(5.0, self._schedule_refresh)
+
+    def on_unmount(self) -> None:
+        if self._refresh_timer is not None:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
 
     @property
     def current_file(self) -> str:

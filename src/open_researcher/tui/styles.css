@@ -282,6 +282,14 @@ TabPane {
 .layout-compact #frontier-scroll,
 .layout-compact #metric-chart {
     min-height: 12;
+    max-height: 24;
+}
+
+.layout-compact #role-activity,
+.layout-compact #graph-summary,
+.layout-compact #lineage-timeline {
+    max-height: 16;
+    overflow-y: auto;
 }
 
 .layout-compact #frontier-main {

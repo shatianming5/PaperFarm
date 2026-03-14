@@ -11,7 +11,7 @@ from textual.containers import Container, ScrollableContainer, Vertical
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.theme import Theme
-from textual.widgets import OptionList, RichLog, TabbedContent, TabPane
+from textual.widgets import RichLog, TabbedContent, TabPane
 
 from open_researcher.activity import ActivityMonitor
 from open_researcher.control_plane import issue_control_command, read_control
@@ -110,6 +110,8 @@ class ResearchApp(App):
                     yield DocViewer(research_dir=self.research_dir, id="doc-viewer")
         yield HotkeyBar(id="hotkey-bar")
 
+    _UI_STATE_FILE = ".tui_state.json"
+
     def on_mount(self) -> None:
         self.register_theme(
             Theme(
@@ -129,12 +131,15 @@ class ResearchApp(App):
         )
         self.theme = "research-command-dark"
         self._sync_layout_mode()
+        self._restore_ui_state()
         self.set_interval(1.0, self._refresh_data)
         if self._on_ready:
             self._on_ready()
 
     def on_resize(self, _) -> None:
-        self._sync_layout_mode()
+        if hasattr(self, "_resize_timer") and self._resize_timer is not None:
+            self._resize_timer.stop()
+        self._resize_timer = self.set_timer(0.15, self._sync_layout_mode)
 
     def _sync_layout_mode(self) -> None:
         width = self.size.width
@@ -178,12 +183,40 @@ class ResearchApp(App):
         "tab-docs": "#docs-sidebar #docs-options",
     }
 
+    def _save_ui_state(self) -> None:
+        state_path = self.research_dir / self._UI_STATE_FILE
+        try:
+            active_tab = self.query_one("#tabs", TabbedContent).active
+        except NoMatches:
+            active_tab = "tab-command"
+        state = {"active_tab": active_tab, "selected_frontier_id": self.selected_frontier_id}
+        try:
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _restore_ui_state(self) -> None:
+        state_path = self.research_dir / self._UI_STATE_FILE
+        if not state_path.exists():
+            return
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            tab = state.get("active_tab", "")
+            if tab:
+                self.query_one("#tabs", TabbedContent).active = tab
+            frontier = state.get("selected_frontier_id", "")
+            if frontier:
+                self.selected_frontier_id = frontier
+        except (json.JSONDecodeError, OSError, NoMatches):
+            pass
+
     def action_switch_tab(self, tab_id: str) -> None:
         try:
             self.query_one("#tabs", TabbedContent).active = tab_id
         except NoMatches:
             logger.debug("Tab %s not found", tab_id)
             return
+        self._save_ui_state()
         # Transfer focus to the primary interactive widget in the target tab
         target = self._TAB_FOCUS_TARGETS.get(tab_id)
         if target:
@@ -213,19 +246,12 @@ class ResearchApp(App):
         except NoMatches:
             logger.debug("Doc viewer not mounted", exc_info=True)
 
-    def on_frontier_focus_panel_frontier_requested(self, event: FrontierFocusPanel.FrontierRequested) -> None:
+    def on_projected_backlog_panel_frontier_requested(self, event: FrontierFocusPanel.FrontierRequested) -> None:
         self._apply_frontier_selection(event.frontier_id)
-
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option_list.id == "frontier-options" and event.option_id:
-            self._apply_frontier_selection(event.option_id)
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id == "frontier-options" and event.option_id:
-            self._apply_frontier_selection(event.option_id)
 
     def _apply_frontier_selection(self, frontier_id: str) -> None:
         self.selected_frontier_id = str(frontier_id or "").strip()
+        self._save_ui_state()
         if not self.selected_frontier_id or self._dashboard_cache is None:
             return
         try:
@@ -251,7 +277,7 @@ class ResearchApp(App):
             _data_errors.append("control")
 
         now = time.monotonic()
-        if now - self._state_cache_time > 5.0 or self._state_cache is None:
+        if now - self._state_cache_time > 2.0 or self._state_cache is None:
             try:
                 self._state_cache = parse_research_state(self.repo_path)
                 self._state_cache_time = now
@@ -456,13 +482,17 @@ class ResearchApp(App):
         self,
         command: Literal["pause", "resume", "skip_current", "clear_skip"],
         reason: str | None = None,
-    ) -> None:
-        issue_control_command(
+    ) -> bool:
+        result = issue_control_command(
             self.research_dir / "control.json",
             command=command,
             source="tui",
             reason=reason,
         )
+        applied = bool(result.get("applied", False))
+        if not applied:
+            logger.debug("Control command %s not applied: %s", command, result)
+        return applied
 
     def action_pause(self) -> None:
         if self._dashboard_cache and self._dashboard_cache.session.paused:

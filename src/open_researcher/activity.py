@@ -13,7 +13,7 @@ class ActivityMonitor:
 
     def __init__(self, research_dir: Path):
         self.path = research_dir / "activity.json"
-        self._lock = FileLock(str(self.path) + ".lock")
+        self._lock = FileLock(str(self.path) + ".lock", timeout=10)
 
     # ---- low-level helpers ------------------------------------------------
 

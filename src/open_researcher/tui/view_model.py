@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,10 +27,14 @@ def _safe_int(value, default: int = 0) -> int:
 
 
 def _short_text(value: str, *, limit: int = 72) -> str:
-    text = str(value or "").strip()
+    text = unicodedata.normalize("NFC", str(value or "").strip())
     if len(text) <= limit:
         return text
-    return text[: limit - 3].rstrip() + "..."
+    truncated = text[: limit - 3]
+    # Avoid splitting combining characters
+    while truncated and unicodedata.combining(truncated[-1]):
+        truncated = truncated[:-1]
+    return truncated.rstrip() + "..."
 
 
 def _read_journal_tail(path: Path, *, max_lines: int = 200) -> list[dict]:
@@ -696,6 +701,18 @@ def build_dashboard_state(
     ]
     claim_items.reverse()
 
+    # Pre-build frontier_id indexes to avoid O(n*m) per-card filtering
+    evidence_by_frontier: dict[str, list[dict]] = {}
+    for row in evidence_rows:
+        fid = str(row.get("frontier_id", "")).strip()
+        if fid:
+            evidence_by_frontier.setdefault(fid, []).append(row)
+    claims_by_frontier: dict[str, list[dict]] = {}
+    for row in claims_rows:
+        fid = str(row.get("frontier_id", "")).strip()
+        if fid:
+            claims_by_frontier.setdefault(fid, []).append(row)
+
     frontier_details: dict[str, FrontierDetail] = {}
     for card in frontiers:
         frontier_row = frontier_by_id.get(card.frontier_id, {})
@@ -706,8 +723,8 @@ def build_dashboard_state(
             frontier_row=frontier_row,
             hypothesis=hypotheses_by_id.get(hypothesis_id, {}),
             spec=specs_by_id.get(spec_id, {}),
-            evidence_rows=[row for row in evidence_rows if str(row.get("frontier_id", "")).strip() == card.frontier_id],
-            claim_rows=[row for row in claims_rows if str(row.get("frontier_id", "")).strip() == card.frontier_id],
+            evidence_rows=evidence_by_frontier.get(card.frontier_id, []),
+            claim_rows=claims_by_frontier.get(card.frontier_id, []),
             primary_metric=session.primary_metric,
             direction=session.direction,
             baseline_value=session.baseline_value,
