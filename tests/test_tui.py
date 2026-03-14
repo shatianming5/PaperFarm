@@ -8,6 +8,7 @@ from open_researcher.tui.view_model import (
     FrontierCard,
     FrontierDetail,
     LineageItem,
+    RoleStatus,
     SessionChrome,
     TimelineItem,
 )
@@ -122,8 +123,18 @@ def test_hotkey_bar_includes_quit():
     assert "q" in str(rendered)
 
 
-def test_session_chrome_bar_renders_protocol_and_metric():
+def test_session_chrome_bar_renders_active_agent():
     widget = SessionChromeBar()
+    active = RoleStatus(
+        key="experiment",
+        label="Experiment Agent",
+        status="running",
+        detail="Testing learning rate warmup",
+        frontier_id="frontier-003",
+        execution_id="exec-789",
+        worker_count=1,
+        updated_at="",
+    )
     widget.update_chrome(
         SessionChrome(
             branch="main",
@@ -143,11 +154,49 @@ def test_session_chrome_bar_renders_protocol_and_metric():
             discard=1,
             crash=1,
             frontier_runnable=3,
-        )
+        ),
+        active_role=active,
+        phase="experimenting",
+        completed=3,
+        total=10,
     )
-    assert "research-v1" in widget.chrome_text
-    assert "main" in widget.chrome_text
-    assert "0.8500" in widget.chrome_text
+    assert "Experiment Agent" in widget.chrome_text
+    assert "frontier-003" in widget.chrome_text
+    assert "3/10" in widget.chrome_text
+
+
+def test_session_chrome_bar_renders_idle_state():
+    widget = SessionChromeBar()
+    widget.update_chrome(
+        SessionChrome(
+            branch="main",
+            protocol="research-v1",
+            mode="autonomous",
+            phase="experimenting",
+            phase_label="Research Loop",
+            paused=False,
+            skip_current=False,
+            primary_metric="loss",
+            direction="lower_is_better",
+            baseline_value=1.0,
+            current_value=0.9,
+            best_value=0.85,
+            total=4,
+            keep=2,
+            discard=1,
+            crash=1,
+            frontier_runnable=0,
+            last_result_frontier_id="frontier-002",
+            last_result_verdict="kept",
+            last_result_metric=0.88,
+        ),
+        phase="experimenting",
+        completed=4,
+        total=10,
+    )
+    # Idle state — should show last result
+    assert "frontier-002" in widget.chrome_text
+    assert "kept" in widget.chrome_text
 
 
 def test_bootstrap_status_panel_renders_prepare_summary():

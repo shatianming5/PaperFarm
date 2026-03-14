@@ -18,7 +18,7 @@ from open_researcher.control_plane import issue_control_command, read_control
 from open_researcher.idea_pool import IdeaBacklog
 from open_researcher.status_cmd import parse_research_state
 from open_researcher.tui.modals import GPUStatusModal, LogScreen
-from open_researcher.tui.view_model import DashboardState, build_dashboard_state, build_docs_workbench
+from open_researcher.tui.view_model import DashboardState, RoleStatus, build_dashboard_state, build_docs_workbench
 from open_researcher.tui.widgets import (
     BootstrapStatusPanel,
     DocsSidebarPanel,
@@ -77,6 +77,7 @@ class ResearchApp(App):
         self._state_cache: dict | None = None
         self._state_cache_time: float = 0.0
         self._dashboard_cache: DashboardState | None = None
+        self._progress_total_high_water: int = 0
 
     def compose(self) -> ComposeResult:
         yield StatsBar(id="stats-bar")
@@ -353,12 +354,38 @@ class ResearchApp(App):
                 phase=self.app_phase,
                 paused=dashboard.session.paused,
                 data_errors=data_errors or [],
+                tokens_used=dashboard.session.tokens_used,
+                token_budget=dashboard.session.token_budget,
+                estimated_cost=dashboard.session.estimated_cost,
             )
         except NoMatches:
             logger.debug("Error refreshing stats bar", exc_info=True)
 
+        # --- Detect active role & progress (shared by ActivityBar + ExperimentStatus) ---
+        _active_role: RoleStatus | None = None
+        _role_label = "Experiment Agent"
+        for _r in [dashboard.roles[2], dashboard.roles[0], dashboard.roles[1]]:
+            if _r.status != "idle":
+                _active_role = _r
+                _role_label = _r.label
+                break
+        _completed = dashboard.session.keep + dashboard.session.discard + dashboard.session.crash
+        _raw_total = max(
+            _completed + dashboard.graph.frontier_runnable,
+            len(rows),
+            len(dashboard.frontiers),
+        )
+        self._progress_total_high_water = max(self._progress_total_high_water, _raw_total)
+        _total = self._progress_total_high_water
+
         try:
-            self.query_one("#session-chrome", SessionChromeBar).update_chrome(dashboard.session)
+            self.query_one("#session-chrome", SessionChromeBar).update_chrome(
+                dashboard.session,
+                active_role=_active_role,
+                phase=self.app_phase,
+                completed=_completed,
+                total=_total,
+            )
         except NoMatches:
             logger.debug("Error refreshing session chrome", exc_info=True)
 
@@ -416,26 +443,22 @@ class ResearchApp(App):
             logger.debug("Error refreshing execution summary", exc_info=True)
 
         try:
-            active = None
-            role_label = "Experiment Agent"
-            for role in [dashboard.roles[2], dashboard.roles[0], dashboard.roles[1]]:
-                if role.status != "idle":
-                    active = {
-                        "status": role.status,
-                        "detail": role.detail,
-                        "frontier_id": role.frontier_id,
-                        "execution_id": role.execution_id,
-                    }
-                    role_label = role.label
-                    break
-            completed = dashboard.session.keep + dashboard.session.discard + dashboard.session.crash
-            total = max(completed + dashboard.graph.frontier_runnable, len(rows), len(dashboard.frontiers))
+            _active_dict = (
+                {
+                    "status": _active_role.status,
+                    "detail": _active_role.detail,
+                    "frontier_id": _active_role.frontier_id,
+                    "execution_id": _active_role.execution_id,
+                }
+                if _active_role
+                else None
+            )
             self.query_one("#exp-status", ExperimentStatusPanel).update_status(
-                active,
-                completed=completed,
-                total=total,
+                _active_dict,
+                completed=_completed,
+                total=_total,
                 phase=self.app_phase,
-                role_label=role_label,
+                role_label=_role_label,
             )
         except NoMatches:
             logger.debug("Error refreshing execution focus", exc_info=True)

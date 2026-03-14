@@ -158,7 +158,16 @@ class StatsBar(Static):
     def render(self) -> str:
         return self.stats_text or f"[bold]Open Researcher[/bold] {_empty_state('first data refresh')}"
 
-    def update_stats(self, state: dict, phase: str = "", paused: bool = False, data_errors: list[str] | None = None) -> None:
+    def update_stats(
+        self,
+        state: dict,
+        phase: str = "",
+        paused: bool = False,
+        data_errors: list[str] | None = None,
+        tokens_used: int = 0,
+        token_budget: int = 0,
+        estimated_cost: float = 0.0,
+    ) -> None:
         total = int(state.get("total", 0) or 0)
         keep = int(state.get("keep", 0) or 0)
         discard = int(state.get("discard", 0) or 0)
@@ -182,7 +191,7 @@ class StatsBar(Static):
             left.append(phase_badges[phase])
         left.append(f"[bold {C_TEXT}]OPEN RESEARCHER[/]")
         left.append(f"[{C_INFO}]{escape(protocol)}[/]")
-        left.append(f"[{C_DIM}]branch {escape(branch)}[/]")
+        left.append(f"[{C_DIM}]{escape(branch)}[/]")
         if paused:
             left.append(_chip("PAUSED", fg="#08111a", bg=C_CORAL))
 
@@ -199,71 +208,152 @@ class StatsBar(Static):
         if data_errors:
             right.append(f"[{C_ERROR}]![/]")
         right.append(f"[{C_DIM}]{now_str}[/]")
-        self.stats_text = "  ".join(left) + sep + "  ".join(right)
+        line1 = "  ".join(left) + sep + "  ".join(right)
+
+        # Line 2: token/cost info (merged from old SessionChromeBar)
+        line2_parts: list[str] = []
+        if tokens_used > 0:
+            if token_budget > 0:
+                ratio = tokens_used / token_budget
+                line2_parts.append(
+                    f"[{C_DIM}]tokens[/] [{C_TEXT}]{tokens_used:,}[/]"
+                    f"/[{C_TEXT}]{token_budget:,}[/] ({ratio:.0%})"
+                )
+            else:
+                line2_parts.append(f"[{C_DIM}]tokens[/] [{C_TEXT}]{tokens_used:,}[/]")
+            if estimated_cost > 0:
+                line2_parts.append(f"[{C_DIM}]est.[/] [{C_SECONDARY}]${estimated_cost:.2f}[/]")
+        if data_errors:
+            line2_parts.append(f"[{C_ERROR}]data: {', '.join(data_errors)}[/]")
+
+        self.stats_text = line1 + ("\n" + "  ".join(line2_parts) if line2_parts else "")
 
 
 class SessionChromeBar(Static):
-    """Session summary panel shown on the command page."""
+    """Activity bar: phase-aware display of current agent status, progress, and metrics."""
 
     chrome_text = reactive("", layout=True)
 
     def render(self) -> str:
         return self.chrome_text or _empty_state("session state")
 
-    def update_chrome(self, chrome: SessionChrome) -> None:
-        mode_label = chrome.mode.replace("_", " ")
-        phase_line = _chip(chrome.phase_label or chrome.phase or "idle", fg="#08111a", bg=C_PRIMARY)
-        control_bits = []
-        if chrome.paused:
-            control_bits.append(_chip("Paused", fg="#08111a", bg=C_CORAL))
-        if chrome.skip_current:
-            control_bits.append(_chip("Skip queued", fg="#08111a", bg=C_WARNING))
-        control_suffix = " ".join(control_bits) if control_bits else f"[{C_DIM}]runtime live[/]"
+    def update_chrome(
+        self,
+        chrome: SessionChrome,
+        *,
+        active_role: RoleStatus | None = None,
+        phase: str = "",
+        completed: int = 0,
+        total: int = 0,
+    ) -> None:
         metric_name = escape(chrome.primary_metric or "metric")
-        config_line = (
-            f"[{C_DIM}]protocol[/] [{C_PRIMARY}]{escape(chrome.protocol)}[/]  "
-            f"[{C_DIM}]mode[/] [{C_TEXT}]{escape(mode_label)}[/]  "
-            f"[{C_DIM}]branch[/] [{C_TEXT}]{escape(chrome.branch)}[/]"
-        )
-        metric_line = (
-            f"[{C_DIM}]metric[/] [bold {C_TEXT}]{metric_name}[/]  "
-            f"[{C_DIM}]baseline[/] [{C_INFO}]{_format_metric(chrome.baseline_value)}[/]  "
-            f"[{C_DIM}]current[/] [{C_SECONDARY}]{_format_metric(chrome.current_value)}[/]  "
-            f"[{C_DIM}]best[/] [bold {C_BEST}]{_format_metric(chrome.best_value)}[/]"
-        )
-        volume_line = (
-            f"[{C_DIM}]results[/] [{C_TEXT}]{chrome.total}[/]  "
-            f"[{C_SUCCESS}]keep {chrome.keep}[/]  "
-            f"[{C_WARNING}]discard {chrome.discard}[/]  "
-            f"[{C_ERROR}]crash {chrome.crash}[/]  "
-            f"[{C_PRIMARY}]runnable {chrome.frontier_runnable}[/]"
-        )
-        token_parts = []
-        if chrome.tokens_used > 0:
-            if chrome.token_budget > 0:
-                ratio = chrome.tokens_used / chrome.token_budget
-                token_parts.append(
-                    f"[{C_DIM}]tokens[/] [{C_TEXT}]{chrome.tokens_used:,}[/] / "
-                    f"[{C_TEXT}]{chrome.token_budget:,}[/] ({ratio:.1%})"
-                )
-            else:
-                token_parts.append(f"[{C_DIM}]tokens[/] [{C_TEXT}]{chrome.tokens_used:,}[/]")
-            if chrome.estimated_cost > 0:
-                token_parts.append(f"[{C_DIM}]est. cost[/] [{C_SECONDARY}]${chrome.estimated_cost:.2f}[/]")
-        token_line = "  ".join(token_parts) if token_parts else ""
-        lines = [
-            f"[bold {C_TEXT}]Research Command Center[/]  {phase_line}  {control_suffix}",
-            config_line,
-            metric_line,
-            volume_line,
-        ]
-        if token_line:
-            lines.append(token_line)
-        if chrome.config_error:
-            lines.append(f"[{C_CORAL}]Config:[/] {escape(chrome.config_error)}")
-        if chrome.graph_error:
-            lines.append(f"[{C_CORAL}]Graph:[/] {escape(chrome.graph_error)}")
-        self.chrome_text = "\n".join(lines)
+
+        def _progress(suffix: str = "") -> str:
+            bar_w = 24
+            if total > 0:
+                filled = min(int(bar_w * completed / max(total, 1)), bar_w)
+                bar = f"[{C_PRIMARY}]{'█' * filled}[/][{C_DIM}]{'░' * (bar_w - filled)}[/]"
+                text = f"  {bar}  [{C_TEXT}]{completed}/{total}[/]"
+                return text + (f"  [{C_DIM}]{suffix}[/]" if suffix else "")
+            return f"  [{C_DIM}]No experiments yet[/]"
+
+        def _metric() -> str:
+            baseline = _format_metric(chrome.baseline_value)
+            current = _format_metric(chrome.current_value)
+            best = _format_metric(chrome.best_value)
+            delta = ""
+            if chrome.baseline_value is not None and chrome.current_value is not None:
+                d = chrome.current_value - chrome.baseline_value
+                improved = d < 0 if chrome.direction == "lower_is_better" else d > 0
+                color = C_SUCCESS if improved else C_CORAL
+                arrow = "▼" if d < 0 else "▲"
+                delta = f" [{color}]({arrow}{abs(d):.4f})[/]"
+            return (
+                f"  [{C_DIM}]{metric_name}:[/] "
+                f"[{C_DIM}]baseline[/] [{C_INFO}]{baseline}[/] → "
+                f"[{C_DIM}]current[/] [{C_SECONDARY}]{current}[/]{delta}  "
+                f"[{C_DIM}]best[/] [bold {C_BEST}]{best}[/]"
+            )
+
+        # State F: Paused (highest priority)
+        if chrome.paused:
+            self.chrome_text = "\n".join([
+                f"[bold {C_CORAL}]⏸ PAUSED[/] [{C_DIM}]— Press [bold {C_INFO}]r[/][{C_DIM}] to resume[/]",
+                self._last_result_line(chrome),
+                _progress(),
+            ])
+            return
+
+        # State C: Scouting
+        if phase == "scouting":
+            detail = escape((active_role.detail if active_role else "") or "Analyzing repository structure")
+            self.chrome_text = "\n".join([
+                f"[bold {C_PRIMARY}]Scout Agent[/] [{C_DIM}]— Analyzing repository[/]",
+                f"  [{C_TEXT}]{detail}[/]",
+            ])
+            return
+
+        # State D: Preparing
+        if phase == "preparing":
+            detail = escape((active_role.detail if active_role else "") or "Installing dependencies")
+            self.chrome_text = "\n".join([
+                f"[bold {C_WARNING}]Repo Prepare[/] [{C_DIM}]— Setting up environment[/]",
+                f"  [{C_TEXT}]{detail}[/]",
+            ])
+            return
+
+        # State E: Reviewing
+        if phase == "reviewing":
+            self.chrome_text = "\n".join([
+                f"[bold {C_SKY}]Review Gate[/] [{C_DIM}]— Waiting for operator confirmation[/]",
+                f"  [{C_DIM}]Approve the research plan to start experimenting[/]",
+            ])
+            return
+
+        # State A: Agent active
+        if active_role and active_role.status != "idle":
+            role_label = escape(active_role.label)
+            frontier = escape(active_role.frontier_id or "")
+            detail = escape(active_role.detail or "")
+            status_chip = _chip(
+                active_role.status.replace("_", " "),
+                fg="#08111a",
+                bg=_status_color(active_role.status),
+            )
+            line1 = f"[bold {C_TEXT}]▶ {role_label}[/]  {status_chip}"
+            if frontier:
+                line1 += f"  [{C_PRIMARY}]{frontier}[/]"
+            lines = [line1]
+            if detail:
+                lines.append(f"  [{C_TEXT}]{detail}[/]")
+            lines.append(_progress())
+            lines.append(_metric())
+            self.chrome_text = "\n".join(lines)
+            return
+
+        # State B: All idle
+        self.chrome_text = "\n".join([
+            self._last_result_line(chrome),
+            _progress("Idle — waiting for next cycle"),
+        ])
+
+    @staticmethod
+    def _last_result_line(chrome: SessionChrome) -> str:
+        if not chrome.last_result_verdict:
+            return f"[{C_DIM}]No experiments completed yet[/]"
+        verdict = chrome.last_result_verdict
+        color = C_SUCCESS if verdict == "keep" else (C_WARNING if verdict == "discard" else C_ERROR)
+        icon = "✓" if verdict == "keep" else ("▸" if verdict == "discard" else "✗")
+        frontier = escape(chrome.last_result_frontier_id or "?")
+        metric = _format_metric(chrome.last_result_metric)
+        delta = ""
+        if chrome.last_result_metric is not None and chrome.baseline_value is not None:
+            d = chrome.last_result_metric - chrome.baseline_value
+            improved = d < 0 if chrome.direction == "lower_is_better" else d > 0
+            delta_color = C_SUCCESS if improved else C_CORAL
+            arrow = "▼" if d < 0 else "▲"
+            delta = f" [{delta_color}](vs baseline {arrow}{abs(d):.4f})[/]"
+        return f"[{color}]{icon} Last: {frontier} {verdict}[/]  [{C_INFO}]{metric}[/]{delta}"
 
 
 class BootstrapStatusPanel(Static):
@@ -275,6 +365,11 @@ class BootstrapStatusPanel(Static):
         return self.summary_text or "[dim]Bootstrap state unavailable[/dim]"
 
     def update_summary(self, summary: BootstrapSummary) -> None:
+        # Fold to single line when bootstrap is done
+        if summary.status in ("completed", "resolved", "cached"):
+            self.summary_text = f"[{C_DIM}]Bootstrap [✓ {summary.status}][/]"
+            return
+
         status_chip = _chip(summary.status.replace("_", " "), fg="#08111a", bg=_status_color(summary.status))
         install_chip = _chip(summary.install_status, fg="#08111a", bg=_status_color(summary.install_status))
         data_chip = _chip(summary.data_status, fg="#08111a", bg=_status_color(summary.data_status))
@@ -284,12 +379,10 @@ class BootstrapStatusPanel(Static):
             f"[bold {C_TEXT}]Repository Prepare[/]  {status_chip}",
             step_line,
         ]
-        # Only show technical paths when bootstrap is not yet completed
-        if summary.status not in ("completed", "resolved", "cached"):
-            lines.append(
-                f"[{C_DIM}]dir[/] [{C_TEXT}]{escape(summary.working_dir)}[/]  "
-                f"[{C_DIM}]python[/] [{C_INFO}]{escape(summary.python_executable or 'unresolved')}[/]"
-            )
+        lines.append(
+            f"[{C_DIM}]dir[/] [{C_TEXT}]{escape(summary.working_dir)}[/]  "
+            f"[{C_DIM}]python[/] [{C_INFO}]{escape(summary.python_executable or 'unresolved')}[/]"
+        )
         if summary.missing_paths:
             lines.append(f"[{C_WARNING}]missing:[/] {escape(', '.join(summary.missing_paths))}")
         if summary.unresolved:
@@ -298,7 +391,7 @@ class BootstrapStatusPanel(Static):
         if summary.errors:
             for item in summary.errors:
                 lines.append(f"[{C_CORAL}]error:[/] {escape(item)}")
-        if summary.log_path and summary.status not in ("completed", "resolved", "cached"):
+        if summary.log_path:
             lines.append(f"[{C_DIM}]log[/] {escape(summary.log_path)}")
         self.summary_text = "\n".join(lines)
 
@@ -324,6 +417,11 @@ class RoleActivityPanel(Static):
         lines = ["  ".join(header_bits)]
 
         for role in roles:
+            if role.status == "idle":
+                # Compress idle roles to a single dim line
+                lines.append(f"[{C_DIM}]· {escape(role.label)}  \\[idle][/]")
+                continue
+
             color = _status_color(role.status)
             status_chip = _chip(_role_label(role.status), fg="#08111a", bg=color)
             meta = []
@@ -333,11 +431,12 @@ class RoleActivityPanel(Static):
                 meta.append(f"[{C_DIM}]{escape(role.execution_id)}[/]")
             if role.worker_count:
                 meta.append(f"[{C_INFO}]{role.worker_count} worker(s)[/]")
-            detail = escape(role.detail or "idle")
+            detail = escape(role.detail or "")
             lines.append(f"[bold {C_TEXT}]{escape(role.label)}[/]  {status_chip}")
             if meta:
                 lines.append(f"[{C_DIM}]{'  '.join(meta)}[/]")
-            lines.append(f"[{C_DIM}]{detail}[/]")
+            if detail:
+                lines.append(f"[{C_DIM}]{detail}[/]")
             lines.append("")
 
         self.roles_text = "\n".join(lines).rstrip()

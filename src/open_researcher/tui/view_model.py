@@ -104,6 +104,11 @@ class SessionChrome:
     tokens_used: int = 0
     token_budget: int = 0
     estimated_cost: float = 0.0
+    # Last experiment result (for idle/paused ActivityBar display)
+    last_result_frontier_id: str = ""
+    last_result_verdict: str = ""
+    last_result_metric: float | None = None
+    last_result_description: str = ""
 
 
 @dataclass(slots=True)
@@ -557,6 +562,30 @@ def build_dashboard_state(
     _ledger = load_ledger(research_dir / "token_ledger.json")
     _ledger_cost = _estimate_cost(_ledger.cumulative) if _ledger.cumulative.tokens_total > 0 else 0.0
 
+    # Extract last result for ActivityBar idle/paused display
+    _last_frontier_id = ""
+    _last_verdict = ""
+    _last_metric: float | None = None
+    _last_description = ""
+    if rows:
+        _last_row = rows[-1]
+        _last_verdict = str(_last_row.get("status", "")).strip()
+        _last_description = _short_text(str(_last_row.get("description", "")).strip(), limit=60)
+        try:
+            _last_metric = float(_last_row.get("metric_value", ""))
+        except (TypeError, ValueError):
+            pass
+        _secondary = _last_row.get("secondary_metrics")
+        if isinstance(_secondary, str):
+            try:
+                _secondary = json.loads(_secondary)
+            except (json.JSONDecodeError, TypeError):
+                _secondary = {}
+        if isinstance(_secondary, dict):
+            _trace = _secondary.get("_open_researcher_trace")
+            if isinstance(_trace, dict):
+                _last_frontier_id = str(_trace.get("frontier_id", "")).strip()
+
     session = SessionChrome(
         branch=str(state.get("branch", "unknown") or "unknown"),
         protocol=str(state.get("protocol", "") or "research-v1"),
@@ -580,6 +609,10 @@ def build_dashboard_state(
         tokens_used=_ledger.cumulative.tokens_total,
         token_budget=_cfg.token_budget,
         estimated_cost=_ledger_cost,
+        last_result_frontier_id=_last_frontier_id,
+        last_result_verdict=_last_verdict,
+        last_result_metric=_last_metric,
+        last_result_description=_last_description,
     )
 
     graph = GraphSummary(
