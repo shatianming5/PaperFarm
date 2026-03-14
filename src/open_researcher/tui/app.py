@@ -54,8 +54,11 @@ class ResearchApp(App):
         ("p", "pause", "Pause"),
         ("r", "resume", "Resume"),
         ("s", "skip", "Skip frontier"),
+        ("S", "clear_skip", "Cancel skip"),
         ("g", "gpu_status", "GPU status"),
         ("l", "view_log", "View log"),
+        ("n", "next_doc", "Next doc"),
+        ("b", "prev_doc", "Prev doc"),
         ("q", "quit_app", "Quit"),
     ]
 
@@ -144,8 +147,23 @@ class ResearchApp(App):
         self.remove_class("layout-wide", "layout-medium", "layout-compact")
         self.add_class(mode)
 
-    def watch_app_phase(self, _old_phase: str, _new_phase: str) -> None:
+    def watch_app_phase(self, _old_phase: str, new_phase: str) -> None:
+        if not self._running:
+            return
         self._refresh_data()
+        # Immediately update hotkey bar so available keys are accurate
+        try:
+            active_tab = ""
+            try:
+                active_tab = self.query_one("#tabs", TabbedContent).active
+            except NoMatches:
+                pass
+            paused = self._dashboard_cache.session.paused if self._dashboard_cache else False
+            self.query_one("#hotkey-bar", HotkeyBar).update_state(
+                paused=paused, phase=new_phase, active_tab=active_tab,
+            )
+        except NoMatches:
+            pass
 
     def watch_trace_banner_text(self, _old_text: str, new_text: str) -> None:
         try:
@@ -153,11 +171,30 @@ class ResearchApp(App):
         except NoMatches:
             logger.debug("Trace banner not mounted yet", exc_info=True)
 
+    _TAB_FOCUS_TARGETS: dict[str, str] = {
+        "tab-command": "#frontier-focus #frontier-options",
+        "tab-execution": "#metric-chart",
+        "tab-logs": "#agent-log",
+        "tab-docs": "#docs-sidebar #docs-options",
+    }
+
     def action_switch_tab(self, tab_id: str) -> None:
         try:
             self.query_one("#tabs", TabbedContent).active = tab_id
         except NoMatches:
             logger.debug("Tab %s not found", tab_id)
+            return
+        # Transfer focus to the primary interactive widget in the target tab
+        target = self._TAB_FOCUS_TARGETS.get(tab_id)
+        if target:
+            self.set_timer(0.1, lambda: self._focus_tab_target(target))
+
+    def _focus_tab_target(self, selector: str) -> None:
+        try:
+            widget = self.query_one(selector)
+            widget.focus()
+        except (NoMatches, Exception):
+            logger.debug("Could not focus %s", selector, exc_info=True)
 
     async def on_docs_sidebar_panel_doc_requested(self, event: DocsSidebarPanel.DocRequested) -> None:
         try:
@@ -205,11 +242,13 @@ class ResearchApp(App):
         self.run_worker(self._bg_gather_data, thread=True, exclusive=True, group="refresh")
 
     def _bg_gather_data(self) -> None:
+        _data_errors: list[str] = []
         try:
             control = self._read_control()
         except Exception:
             logger.debug("Error reading control state", exc_info=True)
             control = {"paused": False, "skip_current": False}
+            _data_errors.append("control")
 
         now = time.monotonic()
         if now - self._state_cache_time > 5.0 or self._state_cache is None:
@@ -218,6 +257,7 @@ class ResearchApp(App):
                 self._state_cache_time = now
             except Exception:
                 logger.warning("Error parsing research state", exc_info=True)
+                _data_errors.append("state")
         state = self._state_cache or {}
 
         ideas: list[dict] = []
@@ -251,7 +291,7 @@ class ResearchApp(App):
         )
 
         try:
-            self.call_from_thread(self._apply_refresh_data, dashboard, state, rows)
+            self.call_from_thread(self._apply_refresh_data, dashboard, state, rows, _data_errors)
         except RuntimeError:
             pass
 
@@ -260,6 +300,7 @@ class ResearchApp(App):
         dashboard: DashboardState,
         state: dict,
         rows: list[dict],
+        data_errors: list[str] | None = None,
     ) -> None:
         self._dashboard_cache = dashboard
         try:
@@ -267,6 +308,7 @@ class ResearchApp(App):
                 state,
                 phase=self.app_phase,
                 paused=dashboard.session.paused,
+                data_errors=data_errors or [],
             )
         except NoMatches:
             logger.debug("Error refreshing stats bar", exc_info=True)
@@ -423,16 +465,29 @@ class ResearchApp(App):
         )
 
     def action_pause(self) -> None:
+        if self._dashboard_cache and self._dashboard_cache.session.paused:
+            self.notify("Already paused", severity="warning")
+            return
         self._write_control_command("pause", reason="paused from TUI hotkey")
-        self.notify("研究会话已暂停")
+        self.notify("Paused", severity="information")
 
     def action_resume(self) -> None:
+        if self._dashboard_cache and not self._dashboard_cache.session.paused:
+            self.notify("Already running", severity="warning")
+            return
         self._write_control_command("resume")
-        self.notify("研究会话已恢复")
+        self.notify("Resumed", severity="information")
 
     def action_skip(self) -> None:
+        if self._dashboard_cache and self._dashboard_cache.session.skip_current:
+            self.notify("Skip already queued", severity="warning")
+            return
         self._write_control_command("skip_current")
-        self.notify("当前 frontier 已标记为跳过")
+        self.notify("Skip queued", severity="information")
+
+    def action_clear_skip(self) -> None:
+        self._write_control_command("clear_skip")
+        self.notify("Skip cancelled", severity="information")
 
     def action_gpu_status(self) -> None:
         gpu_path = self.research_dir / "gpu_status.json"
@@ -449,6 +504,30 @@ class ResearchApp(App):
     def action_view_log(self) -> None:
         log_path = str(self.research_dir / "run.log")
         self.push_screen(LogScreen(log_path))
+
+    async def action_next_doc(self) -> None:
+        try:
+            active_tab = self.query_one("#tabs", TabbedContent).active
+            if active_tab != "tab-docs":
+                return
+            doc_viewer = self.query_one("#doc-viewer", DocViewer)
+            idx = DocViewer.DOC_FILES.index(doc_viewer.current_file) if doc_viewer.current_file in DocViewer.DOC_FILES else -1
+            next_idx = (idx + 1) % len(DocViewer.DOC_FILES)
+            await doc_viewer.select_doc(DocViewer.DOC_FILES[next_idx])
+        except (NoMatches, Exception):
+            pass
+
+    async def action_prev_doc(self) -> None:
+        try:
+            active_tab = self.query_one("#tabs", TabbedContent).active
+            if active_tab != "tab-docs":
+                return
+            doc_viewer = self.query_one("#doc-viewer", DocViewer)
+            idx = DocViewer.DOC_FILES.index(doc_viewer.current_file) if doc_viewer.current_file in DocViewer.DOC_FILES else 0
+            prev_idx = (idx - 1) % len(DocViewer.DOC_FILES)
+            await doc_viewer.select_doc(DocViewer.DOC_FILES[prev_idx])
+        except (NoMatches, Exception):
+            pass
 
     def action_quit_app(self) -> None:
         self.exit()

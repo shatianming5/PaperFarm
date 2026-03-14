@@ -58,6 +58,7 @@ class ReviewScreen(Screen[str | None]):
         super().__init__()
         self.research_dir = research_dir
         self._data = load_review_data(research_dir)
+        self._edited: set[str] = set()
 
     def compose(self) -> ComposeResult:
         with ScrollableContainer(id="review-container"):
@@ -115,6 +116,13 @@ class ReviewScreen(Screen[str | None]):
     def action_cancel(self) -> None:
         self.dismiss("quit")
 
+    def _mark_edited(self, section: str, label_id: str, original_label: str) -> None:
+        self._edited.add(section)
+        try:
+            self.query_one(f"#{label_id}", Label).update(f"{original_label}  [bold #7dd4b0]edited[/]")
+        except Exception:
+            pass
+
     def action_edit_strategy(self) -> None:
         """Open strategy file in an editable TextArea overlay."""
         content = self._data["strategy"]
@@ -127,6 +135,7 @@ class ReviewScreen(Screen[str | None]):
                     self.query_one("#strategy-content", Static).update(new_content)
                 except Exception:
                     pass
+                self._mark_edited("strategy", "section-strategy", "Research Strategy  [e] edit")
 
         self.app.push_screen(EditDocScreen(content, "Research Strategy"), _on_save)
 
@@ -142,6 +151,7 @@ class ReviewScreen(Screen[str | None]):
                     self.query_one("#evaluation-content", Static).update(new_content)
                 except Exception:
                     pass
+                self._mark_edited("evaluation", "section-evaluation", "Evaluation Plan  [m] edit")
 
         self.app.push_screen(EditDocScreen(content, "Evaluation Plan"), _on_save)
 
@@ -165,12 +175,23 @@ class EditDocScreen(Screen[str | None]):
             yield Button("Save", variant="primary", id="btn-save")
             yield Button("Cancel", id="btn-edit-cancel")
 
+    def _has_changes(self) -> bool:
+        try:
+            current = self.query_one("#edit-area", TextArea).text
+            return current != self._content
+        except Exception:
+            return False
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
             text = self.query_one("#edit-area", TextArea).text
             self.dismiss(text)
         else:
+            if self._has_changes():
+                self.notify("Changes discarded", severity="warning")
             self.dismiss(None)
 
     def action_cancel(self) -> None:
+        if self._has_changes():
+            self.notify("Changes discarded", severity="warning")
         self.dismiss(None)

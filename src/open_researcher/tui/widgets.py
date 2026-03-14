@@ -46,6 +46,11 @@ C_SKY = "#5ac8fa"
 C_CORAL = "#ff8f70"
 
 
+def _empty_state(what: str) -> str:
+    """Render a consistent empty-state placeholder."""
+    return f"[{C_DIM}]Waiting for {what}...[/]"
+
+
 def _format_metric(value) -> str:
     try:
         return f"{float(value):.4f}"
@@ -151,9 +156,9 @@ class StatsBar(Static):
     stats_text = reactive("")
 
     def render(self) -> str:
-        return self.stats_text or "[bold]Open Researcher[/bold] [dim]booting command center...[/dim]"
+        return self.stats_text or f"[bold]Open Researcher[/bold] {_empty_state('first data refresh')}"
 
-    def update_stats(self, state: dict, phase: str = "", paused: bool = False) -> None:
+    def update_stats(self, state: dict, phase: str = "", paused: bool = False, data_errors: list[str] | None = None) -> None:
         total = int(state.get("total", 0) or 0)
         keep = int(state.get("keep", 0) or 0)
         discard = int(state.get("discard", 0) or 0)
@@ -191,6 +196,8 @@ class StatsBar(Static):
             right.append(f"[bold {C_BEST}]best={_format_metric(best)}[/]")
         import time as _time
         now_str = _time.strftime("%H:%M:%S")
+        if data_errors:
+            right.append(f"[{C_ERROR}]![/]")
         right.append(f"[{C_DIM}]{now_str}[/]")
         self.stats_text = "  ".join(left) + sep + "  ".join(right)
 
@@ -201,7 +208,7 @@ class SessionChromeBar(Static):
     chrome_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.chrome_text or "[dim]No session state yet[/dim]"
+        return self.chrome_text or _empty_state("session state")
 
     def update_chrome(self, chrome: SessionChrome) -> None:
         mode_label = chrome.mode.replace("_", " ")
@@ -302,11 +309,11 @@ class RoleActivityPanel(Static):
     roles_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.roles_text or "[dim]No role activity yet[/dim]"
+        return self.roles_text or _empty_state("role activity")
 
     def update_roles(self, roles: list[RoleStatus], *, paused: bool = False, skip_current: bool = False) -> None:
         if not roles:
-            self.roles_text = "[dim]No role activity yet[/dim]"
+            self.roles_text = _empty_state("role activity")
             return
 
         header_bits = [f"[bold {C_TEXT}]Role Activity[/]"]
@@ -342,7 +349,7 @@ class ResearchGraphSummaryPanel(Static):
     summary_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.summary_text or "[dim]No research graph yet[/dim]"
+        return self.summary_text or _empty_state("research graph")
 
     def update_summary(self, summary: GraphSummary) -> None:
         counts = summary.frontier_status_counts
@@ -411,9 +418,9 @@ class ProjectedBacklogPanel(Static):
 
     def update_frontiers(self, frontiers: list[FrontierCard]) -> None:
         if not frontiers:
-            self.items_text = "[dim]No projected backlog items yet[/dim]"
+            self.items_text = _empty_state("frontier data")
             try:
-                self.query_one("#frontier-header", Static).update("[dim]No projected backlog items yet[/dim]")
+                self.query_one("#frontier-header", Static).update(_empty_state("frontier data"))
                 self.query_one("#frontier-options", OptionList).set_options([])
                 self.query_one("#frontier-active", Static).update("")
             except Exception:
@@ -765,7 +772,7 @@ class IdeaListPanel(ProjectedBacklogPanel):
 
     def update_ideas(self, ideas: list[dict]) -> None:
         if not ideas:
-            self.items_text = "[dim]No projected backlog items yet[/dim]"
+            self.items_text = _empty_state("frontier data")
             return
 
         def _sort_key(idea: dict) -> tuple[int, str]:
@@ -821,7 +828,7 @@ class EvidenceClaimsPanel(Static):
     body_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.body_text or "[dim]No evidence or claim updates yet[/dim]"
+        return self.body_text or _empty_state("evidence and claims")
 
     def update_items(self, evidence: list[EvidenceItem], claims: list[ClaimItem]) -> None:
         lines = [f"[bold {C_TEXT}]Evidence & Claims[/]"]
@@ -863,7 +870,7 @@ class LineageTimelinePanel(Static):
     body_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.body_text or "[dim]No lineage or timeline data yet[/dim]"
+        return self.body_text or _empty_state("lineage and timeline")
 
     def update_items(self, lineage: list[LineageItem], timeline: list[TimelineItem]) -> None:
         lines = [f"[bold {C_TEXT}]Lineage & Timeline[/]"]
@@ -992,9 +999,9 @@ class DocsSidebarPanel(Static):
 
     def update_docs(self, items: list[DocNavItem], *, current_file: str) -> None:
         if not items:
-            self.body_text = "[dim]No document index yet[/dim]"
+            self.body_text = _empty_state("document index")
             try:
-                self.query_one("#docs-sidebar-header", Static).update("[dim]No document index yet[/dim]")
+                self.query_one("#docs-sidebar-header", Static).update(_empty_state("document index"))
                 self.query_one("#docs-recent", Static).update("")
                 self.query_one("#docs-options", OptionList).set_options([])
                 self.query_one("#docs-preview", Static).update("")
@@ -1137,7 +1144,7 @@ class ExperimentStatusPanel(Static):
     status_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.status_text or "[dim]No active execution yet[/dim]"
+        return self.status_text or _empty_state("execution data")
 
     def update_status(
         self,
@@ -1207,7 +1214,7 @@ class ExecutionSummaryPanel(Static):
     summary_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.summary_text or "[dim]No execution summary yet[/dim]"
+        return self.summary_text or _empty_state("execution summary")
 
     def update_summary(self, summary: ExecutionSummary, *, phase_label: str = "") -> None:
         lines = [
@@ -1256,7 +1263,10 @@ class HotkeyBar(Static):
         else:
             keys.insert(1, f"[bold {C_INFO}]p[/] [{C_DIM}]pause[/]")
         if phase == "experimenting":
-            keys.insert(2, f"[bold {C_INFO}]s[/] [{C_DIM}]skip frontier[/]")
+            keys.insert(2, f"[bold {C_INFO}]s[/] [{C_DIM}]skip[/]")
+            keys.insert(3, f"[bold {C_INFO}]S[/] [{C_DIM}]undo skip[/]")
+        if active_tab == "tab-docs":
+            keys.insert(-1, f"[bold {C_INFO}]n[/]/[bold {C_INFO}]b[/] [{C_DIM}]next/prev doc[/]")
         return "  ".join(keys)
 
 
@@ -1342,11 +1352,11 @@ class RecentExperiments(Static):
     results_text = reactive("", layout=True)
 
     def render(self) -> str:
-        return self.results_text or "[dim]No experiments yet[/dim]"
+        return self.results_text or _empty_state("experiment results")
 
     def update_results(self, rows: list[dict], metric_name: str | None = None) -> None:
         if not rows:
-            self.results_text = "[dim]No experiments yet[/dim]"
+            self.results_text = _empty_state("experiment results")
             return
 
         title = metric_name or rows[-1].get("primary_metric", "metric")

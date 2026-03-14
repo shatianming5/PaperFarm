@@ -39,6 +39,19 @@ class AddIdeaModal(ModalScreen[dict | None]):
         else:
             self.dismiss(None)
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Allow Enter to submit from any input field."""
+        desc = self.query_one("#idea-desc", Input).value.strip()
+        if not desc:
+            self.notify("Description cannot be empty", severity="warning")
+            return
+        cat = self.query_one("#idea-category", Select).value
+        try:
+            pri = int(self.query_one("#idea-priority", Input).value)
+        except ValueError:
+            pri = 5
+        self.dismiss({"description": desc, "category": cat, "priority": pri})
+
     def action_cancel(self) -> None:
         self.dismiss(None)
 
@@ -64,8 +77,14 @@ class GoalInputModal(ModalScreen[str | None]):
             self.dismiss(None)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "goal-input":
+            return
         goal = event.value.strip()
-        self.dismiss(goal if goal else None)
+        if goal:
+            self.dismiss(goal)
+        else:
+            self.notify("No goal set — agent will decide automatically", severity="information")
+            self.dismiss(None)
 
     def action_skip(self) -> None:
         self.dismiss(None)
@@ -120,7 +139,7 @@ class GPUStatusModal(ModalScreen):
 class LogScreen(Screen):
     """Full-screen log viewer with search."""
 
-    BINDINGS = [("escape", "go_back", "Back"), ("q", "go_back", "Back")]
+    BINDINGS = [("escape", "go_back", "Back")]
 
     def __init__(self, log_path: str):
         super().__init__()
@@ -146,8 +165,7 @@ class LogScreen(Screen):
         yield TextArea("\n".join(self._all_lines), read_only=True, id="log-content")
         footer = (
             "[bold #7dcfff]\\[Esc][/bold #7dcfff] return  "
-            "[bold #7dcfff]\\[q][/bold #7dcfff] quit  "
-            "[#8899ab]Type to filter log lines[/#8899ab]"
+            "[#8899ab]Type in filter box to search log lines[/#8899ab]"
         )
         yield Static(footer, id="log-footer")
 
@@ -157,10 +175,16 @@ class LogScreen(Screen):
         query = event.value.strip().lower()
         if not query:
             filtered = self._all_lines
+            count_msg = f"{len(self._all_lines)} lines"
         else:
             filtered = [line for line in self._all_lines if query in line.lower()]
+            count_msg = f"{len(filtered)}/{len(self._all_lines)} matches"
         try:
             self.query_one("#log-content", TextArea).text = "\n".join(filtered)
+            self.query_one("#log-footer", Static).update(
+                f"[bold #7dcfff]\\[Esc][/bold #7dcfff] return  "
+                f"[#8899ab]{count_msg}[/#8899ab]"
+            )
         except Exception:
             pass
 

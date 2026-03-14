@@ -103,7 +103,7 @@ def test_idea_list_panel_renders():
 def test_idea_list_panel_empty():
     panel = IdeaListPanel()
     panel.update_ideas([])
-    assert "No projected backlog items" in panel.ideas_text
+    assert "Waiting for" in panel.ideas_text
 
 
 def test_hotkey_bar_shows_tabs():
@@ -345,7 +345,7 @@ def test_recent_experiments_renders():
 def test_recent_experiments_empty():
     widget = RecentExperiments()
     widget.update_results([])
-    assert "No experiments" in widget.results_text
+    assert "Waiting for" in widget.results_text
 
 
 def test_render_ideas_markdown_empty():
