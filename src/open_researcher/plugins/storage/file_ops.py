@@ -66,6 +66,13 @@ def locked_update_json(
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 data = default() if callable(default) else default
+        # Guard: if loaded data type differs from default (e.g. bare list
+        # when dict expected), fall back to default so updaters can
+        # safely mutate in-place.
+        if default is not None and data is not None:
+            expected = default() if callable(default) else default
+            if expected is not None and type(data) is not type(expected):
+                data = expected
         result = updater(data)
         atomic_write_json(path, data)
         return data, result

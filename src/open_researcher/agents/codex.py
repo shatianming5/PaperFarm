@@ -10,6 +10,7 @@ _DEFAULT_MODEL = "gpt-5.3-codex"
 _DEFAULT_SANDBOX = "workspace-write"
 _SANDBOX_ALIAS_FLAGS = {
     "full-auto": ["--full-auto"],
+    "bypass": ["--dangerously-bypass-approvals-and-sandbox"],
 }
 
 

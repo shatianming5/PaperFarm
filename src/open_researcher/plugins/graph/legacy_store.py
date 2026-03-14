@@ -834,7 +834,7 @@ class ResearchGraphStore:
         pool_lock = FileLock(str(pool_path) + ".lock")
 
         def _replace_pool(data):
-            existing = data if isinstance(data, dict) else {"ideas": []}
+            existing = data
             preserved = {key: value for key, value in existing.items() if key != "ideas"}
             preserved["ideas"] = pool_payload["ideas"]
             data.clear()
