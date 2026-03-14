@@ -217,7 +217,7 @@ class ResearchApp(App):
                 self._state_cache = parse_research_state(self.repo_path)
                 self._state_cache_time = now
             except Exception:
-                logger.debug("Error parsing research state", exc_info=True)
+                logger.warning("Error parsing research state", exc_info=True)
         state = self._state_cache or {}
 
         ideas: list[dict] = []
@@ -433,7 +433,7 @@ class ResearchApp(App):
         gpus = []
         if gpu_path.exists():
             try:
-                data = json.loads(gpu_path.read_text())
+                data = json.loads(gpu_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     gpus = data.get("gpus", [])
             except (json.JSONDecodeError, OSError, TypeError):

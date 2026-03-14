@@ -252,7 +252,7 @@ try:
 except EOFError:
     answer = "n"
 if answer == "y":
-    app = ResearchApp(DEMO_DIR, multi=True)
+    app = ResearchApp(DEMO_DIR)
     app.run()
     print("\n  TUI 已退出。")
 else:

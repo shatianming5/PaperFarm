@@ -32,6 +32,31 @@ def _short_text(value: str, *, limit: int = 72) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _read_journal_tail(path: Path, *, max_lines: int = 200) -> list[dict]:
+    """Read the last *max_lines* well-formed JSONL records from *path*."""
+    if not path.exists():
+        return []
+    try:
+        import os
+        chunk = 128 * 1024
+        with open(path, encoding="utf-8", errors="replace") as f:
+            f.seek(0, os.SEEK_END)
+            pos = max(f.tell() - chunk, 0)
+            f.seek(pos)
+            tail_lines = f.read().splitlines()[-max_lines:]
+    except OSError:
+        return []
+    records: list[dict] = []
+    for line in tail_lines:
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
 def _load_json_object(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -353,9 +378,9 @@ def _build_frontier_detail(
     hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
     spec = spec if isinstance(spec, dict) else {}
     metric_values = [
-        _safe_float(row.get("metric_value"))
+        v
         for row in evidence_rows
-        if _safe_float(row.get("metric_value")) is not None
+        if (v := _safe_float(row.get("metric_value"))) is not None
     ]
     latest_metric_value = metric_values[-1] if metric_values else None
     best_metric_value = None
@@ -506,14 +531,17 @@ def build_dashboard_state(
     bootstrap_payload = state.get("bootstrap") if isinstance(state.get("bootstrap"), dict) else {}
     graph_state = state.get("graph") if isinstance(state.get("graph"), dict) else {}
     graph_frontier_rows = [row for row in graph_payload.get("frontier", []) if isinstance(row, dict)]
-    frontier_by_id = {str(row.get("id", "")).strip(): row for row in graph_frontier_rows if isinstance(row, dict)}
+    frontier_by_id = {
+        k: row for row in graph_frontier_rows
+        if isinstance(row, dict) and (k := str(row.get("id", "")).strip())
+    }
     hypotheses_by_id = {
-        str(row.get("id", "")).strip(): row for row in graph_payload.get("hypotheses", []) if isinstance(row, dict)
+        k: row for row in graph_payload.get("hypotheses", [])
+        if isinstance(row, dict) and (k := str(row.get("id", "")).strip())
     }
     specs_by_id = {
-        str(row.get("id", "")).strip(): row
-        for row in graph_payload.get("experiment_specs", [])
-        if isinstance(row, dict)
+        k: row for row in graph_payload.get("experiment_specs", [])
+        if isinstance(row, dict) and (k := str(row.get("id", "")).strip())
     }
 
     from open_researcher.config import load_config
@@ -707,8 +735,9 @@ def build_dashboard_state(
     lineage_items.reverse()
 
     timeline_items: list[TimelineItem] = []
+    # Read only the tail of the journal to avoid O(n) on large files.
     journal = EventJournal(research_dir / "events.jsonl")
-    records = journal.read_records()
+    records = _read_journal_tail(journal.path, max_lines=200)
     interesting_events = {
         "manager_cycle_started",
         "frontier_synced",
