@@ -12,7 +12,9 @@ from open_researcher.parallel_runtime import (
 from open_researcher.worker_plugins import WorkerRuntimePlugins
 
 
-def test_parallel_runtime_returns_stop_reason_for_resource_deadlock(tmp_path, monkeypatch):
+@patch("open_researcher.worker.time.sleep", return_value=None)
+@patch("open_researcher.worker.random.uniform", return_value=0.01)
+def test_parallel_runtime_returns_stop_reason_for_resource_deadlock(_mock_uniform, _mock_sleep, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     research = repo / ".research"
