@@ -95,7 +95,15 @@ class AgentAdapter(ABC):
         finally:
             if proc.stdout:
                 proc.stdout.close()
-            proc.wait()
+            try:
+                proc.wait(timeout=43200)  # 12h max
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                return 124  # timeout exit code
         return proc.returncode
 
     def terminate(self) -> None:

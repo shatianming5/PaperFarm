@@ -1,6 +1,7 @@
 """OpenCode agent adapter."""
 
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -13,6 +14,10 @@ class OpencodeAdapter(AgentAdapter):
     name = "opencode"
     command = "opencode"
     _supports_run_subcommand: bool | None = None
+
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        self._detect_lock = threading.Lock()
 
     def build_command(self, program_md: Path, workdir: Path) -> list[str]:
         return self._build_prompt_command("<prompt>", workdir=workdir)
@@ -50,18 +55,19 @@ class OpencodeAdapter(AgentAdapter):
         return [self.command, *flags, "--prompt", prompt]
 
     def _supports_run_command(self, workdir: Path | None) -> bool:
-        if self._supports_run_subcommand is not None:
+        with self._detect_lock:
+            if self._supports_run_subcommand is not None:
+                return self._supports_run_subcommand
+            cwd = str(workdir) if workdir is not None else None
+            try:
+                result = subprocess.run(
+                    [self.command, "run", "--help"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                )
+            except OSError:
+                self._supports_run_subcommand = False
+                return False
+            self._supports_run_subcommand = result.returncode == 0
             return self._supports_run_subcommand
-        cwd = str(workdir) if workdir is not None else None
-        try:
-            result = subprocess.run(
-                [self.command, "run", "--help"],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
-            self._supports_run_subcommand = False
-            return False
-        self._supports_run_subcommand = result.returncode == 0
-        return self._supports_run_subcommand

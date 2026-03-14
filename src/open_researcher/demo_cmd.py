@@ -1,6 +1,7 @@
 """Demo command — launch TUI with pre-populated sample data, no agent needed."""
 
 import json
+import logging
 import shlex
 import subprocess
 import tempfile
@@ -10,6 +11,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
+
+from open_researcher.storage import atomic_write_text
 
 console = Console()
 
@@ -174,15 +179,17 @@ def _populate_research(research_dir: Path) -> None:
     """Fill .research/ with realistic sample data."""
     base_time = datetime.now(timezone.utc) - timedelta(hours=12)
 
-    (research_dir / "results.tsv").write_text(_build_results_tsv(base_time))
-    (research_dir / "idea_pool.json").write_text(json.dumps(_build_idea_pool(), indent=2))
-    (research_dir / "activity.json").write_text(json.dumps(_build_activity(), indent=2))
-    (research_dir / "control.json").write_text(json.dumps({"paused": False, "skip_current": False}))
-    (research_dir / "events.jsonl").write_text("")
-    (research_dir / "experiment_progress.json").write_text(
-        json.dumps({"phase": "experimenting", "experiment_count": 15})
+    atomic_write_text(research_dir / "results.tsv", _build_results_tsv(base_time))
+    atomic_write_text(research_dir / "idea_pool.json", json.dumps(_build_idea_pool(), indent=2))
+    atomic_write_text(research_dir / "activity.json", json.dumps(_build_activity(), indent=2))
+    atomic_write_text(research_dir / "control.json", json.dumps({"paused": False, "skip_current": False}))
+    atomic_write_text(research_dir / "events.jsonl", "")
+    atomic_write_text(
+        research_dir / "experiment_progress.json",
+        json.dumps({"phase": "experimenting", "experiment_count": 15}),
     )
-    (research_dir / "gpu_status.json").write_text(
+    atomic_write_text(
+        research_dir / "gpu_status.json",
         json.dumps(
             {
                 "gpus": [
@@ -217,10 +224,11 @@ def _populate_research(research_dir: Path) -> None:
                     },
                 ],
             }
-        )
+        ),
     )
 
-    (research_dir / "config.yaml").write_text(
+    atomic_write_text(
+        research_dir / "config.yaml",
         "mode: autonomous\n"
         "experiment:\n"
         "  timeout: 600\n"
@@ -234,19 +242,19 @@ def _populate_research(research_dir: Path) -> None:
         "  web_search: true\n"
         "  search_interval: 5\n"
         "gpu:\n"
-        "  remote_hosts: []\n"
+        "  remote_hosts: []\n",
     )
 
-    (research_dir / "project-understanding.md").write_text(_PROJECT_UNDERSTANDING)
-    (research_dir / "literature.md").write_text(_LITERATURE)
-    (research_dir / "evaluation.md").write_text(_EVALUATION)
-    (research_dir / "ideas.md").write_text("# Ideas\n\nSee `idea_pool.json` for structured idea tracking.\n")
-    (research_dir / "run.log").write_text("")
+    atomic_write_text(research_dir / "project-understanding.md", _PROJECT_UNDERSTANDING)
+    atomic_write_text(research_dir / "literature.md", _LITERATURE)
+    atomic_write_text(research_dir / "evaluation.md", _EVALUATION)
+    atomic_write_text(research_dir / "ideas.md", "# Ideas\n\nSee `idea_pool.json` for structured idea tracking.\n")
+    atomic_write_text(research_dir / "run.log", "")
 
     scripts = research_dir / "scripts"
     scripts.mkdir(exist_ok=True)
-    (scripts / "record.py").write_text("")
-    (scripts / "rollback.sh").write_text("")
+    atomic_write_text(scripts / "record.py", "")
+    atomic_write_text(scripts / "rollback.sh", "")
 
     (research_dir / "worktrees").mkdir(exist_ok=True)
 
@@ -282,8 +290,8 @@ def _inject_logs(app, delay: float = 0.3) -> None:
     for line in _DEMO_LOG_LINES:
         try:
             app.call_from_thread(app._do_append_log, line)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Demo log injection failed: %s", exc)
         time.sleep(delay)
 
 
@@ -300,8 +308,8 @@ def _setup_demo_repo(repo: Path) -> None:
         cwd=str(repo),
         capture_output=True,
     )
-    (repo / "train.py").write_text("# nanoGPT training script\n")
-    (repo / "model.py").write_text("# GPT model definition\n")
+    atomic_write_text(repo / "train.py", "# nanoGPT training script\n")
+    atomic_write_text(repo / "model.py", "# GPT model definition\n")
     subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True)
     subprocess.run(
         ["git", "commit", "-m", "initial", "--quiet"],
@@ -343,7 +351,8 @@ def do_demo(serve: bool = False, port: int = 8000) -> None:
         python_exe = str(Path(python_exe).resolve()) if Path(python_exe).exists() else _sys.executable
 
         launcher = repo / "_serve_launcher.py"
-        launcher.write_text(
+        atomic_write_text(
+            launcher,
             "import threading\n"
             "from pathlib import Path\n"
             "from open_researcher.tui.app import ResearchApp\n"
@@ -354,7 +363,7 @@ def do_demo(serve: bool = False, port: int = 8000) -> None:
             "    t = threading.Thread(target=_inject_logs, args=(app,), daemon=True)\n"
             "    t.start()\n"
             "app._on_ready = on_ready\n"
-            "app.run()\n"
+            "app.run()\n",
         )
 
         console.print(f"Launching TUI in browser at [bold]http://localhost:{port}[/bold]\n")

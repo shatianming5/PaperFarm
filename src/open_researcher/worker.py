@@ -1,8 +1,10 @@
 """Parallel worker manager -- run experiments across multiple GPUs."""
 
+import hashlib
 import json
 import logging
 import os
+import random
 import signal
 import subprocess
 import threading
@@ -10,6 +12,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+
+from filelock import FileLock
 
 from open_researcher.activity import ActivityMonitor
 from open_researcher.bootstrap import command_env_for_python, read_bootstrap_state
@@ -46,6 +50,7 @@ class DetachedRunOutcome:
     run_code: int = 1
     should_requeue: bool = False
     stop_after_finalize: bool = False
+    """When True, signals the worker manager to stop all workers after finalizing this run."""
 
 
 @dataclass(slots=True)
@@ -176,7 +181,9 @@ class WorkerManager:
         results_before_count: int,
         idea: dict,
     ) -> dict | None:
-        rows = load_results(repo_path)
+        _results_lock = FileLock(str(repo_path / ".research" / "results.tsv.lock"), timeout=10)
+        with _results_lock:
+            rows = load_results(repo_path)
         expected_idea_id = str(idea.get("id", "")).strip()
         expected_execution_id = str(idea.get("execution_id", "")).strip()
         expected_frontier_id = str(idea.get("frontier_id", "")).strip()
@@ -247,8 +254,13 @@ class WorkerManager:
 
     @staticmethod
     def _safe_state_component(value: str, fallback: str) -> str:
-        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in str(value or "").strip())
-        return cleaned or fallback
+        raw = str(value or "").strip()
+        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
+        if not cleaned:
+            return fallback
+        if cleaned != raw:
+            cleaned = cleaned + "_" + hashlib.md5(raw.encode()).hexdigest()[:8]
+        return cleaned
 
     def _detached_state_path(self, idea: dict) -> Path:
         idea_id = self._safe_state_component(str(idea.get("id", "")).strip(), "idea")
@@ -259,10 +271,12 @@ class WorkerManager:
         path = self._detached_state_path(idea)
         if not path.exists():
             return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            return None
+        lock = FileLock(str(path) + ".lock", timeout=5)
+        with lock:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                return None
         if not isinstance(data, dict):
             return None
         expected_idea_id = str(idea.get("id", "")).strip()
@@ -278,7 +292,9 @@ class WorkerManager:
     def _write_detached_state(self, idea: dict, payload: dict) -> None:
         path = self._detached_state_path(idea)
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(path, payload)
+        lock = FileLock(str(path) + ".lock", timeout=5)
+        with lock:
+            atomic_write_json(path, payload)
 
     def _saturation_context_path(self, idea: dict) -> Path:
         idea_id = self._safe_state_component(str(idea.get("id", "")).strip(), "idea")
@@ -949,13 +965,28 @@ class WorkerManager:
                             idea="",
                         )
                         self._record_resource_deadlock()
-                        self.on_output(
-                            f"[{wid}] Pending ideas are unschedulable with current resources, stopping batch"
-                        )
-                        self.stop()
+                        # Retry with random backoff before giving up
+                        retried = False
+                        for _attempt in range(3):
+                            backoff = random.uniform(5, 30)
+                            self.on_output(f"[{wid}] Resource deadlock, retrying in {backoff:.0f}s...")
+                            time.sleep(backoff)
+                            if self._should_stop():
+                                break
+                            idea, allocation, resource_state = self._claim_next_runnable_idea(wid, gpu)
+                            if idea or resource_state != "resource_deadlock":
+                                retried = True
+                                break
+                        if not retried:
+                            self.on_output(f"[{wid}] Resource deadlock persists after 3 retries, stopping")
+                            self.stop()
+                            break
+                        if not idea:
+                            continue
+                        # Fall through to experiment execution with the newly claimed idea
+                    else:
+                        self.on_output(f"[{wid}] No more pending ideas, stopping")
                         break
-                    self.on_output(f"[{wid}] No more pending ideas, stopping")
-                    break
 
                 idea_description = str(idea.get("description", ""))
                 claim_token = str(idea.get("claim_token", "")).strip()
@@ -979,21 +1010,26 @@ class WorkerManager:
                         notify_finished = False
                         break
 
-                    if consume_skip_current(self.research_dir / "control.json", source=f"{wid}:runtime"):
-                        self.on_output(f"[{wid}] Consumed skip_current for {idea['id']}")
+                    ctrl = read_control(self.research_dir / "control.json")
+                    if ctrl.get("skip_current"):
                         applied = self.idea_pool.update_status(idea["id"], "skipped", claim_token=claim_token or None)
-                        if not applied:
-                            self.on_output(
-                                f"[{wid}] Claim race detected for {idea['id']}; skip write suppressed, cleanup applied"
-                            )
+                        if applied:
+                            consume_skip_current(self.research_dir / "control.json", source=f"{wid}:runtime")
+                            self.on_output(f"[{wid}] Consumed skip_current for {idea['id']}")
+                        else:
+                            self.on_output(f"[{wid}] Claim race on skip for {idea['id']}; flag preserved")
                         run_code = 0
                         continue
 
-                    memory_context = (
-                        self._plugins.failure_memory.prepare(idea_description, wid)
-                        if self._plugins.failure_memory is not None
-                        else None
-                    )
+                    try:
+                        memory_context = (
+                            self._plugins.failure_memory.prepare(idea_description, wid)
+                            if self._plugins.failure_memory is not None
+                            else None
+                        )
+                    except Exception as exc:
+                        logger.info("Failure memory prepare failed: %s", exc)
+                        memory_context = None
                     failure_class = memory_context.failure_class if memory_context is not None else "general_failure"
                     ranked_fix_actions = memory_context.ranked_fix_actions if memory_context is not None else []
                     first_fix_action = (
@@ -1028,6 +1064,10 @@ class WorkerManager:
                             else 0
                         ),
                     )
+                    logger.debug(
+                        "Activity state updated: worker=%s expected_status=running idea=%s",
+                        wid, idea_description[:50],
+                    )
                     self.on_output(f"[{wid}] Running: {idea_description[:60]}")
                     gpu_env = allocation.env if allocation is not None else {}
                     for line in allocation.log_lines if allocation is not None else []:
@@ -1056,7 +1096,9 @@ class WorkerManager:
                             logger.debug("Experiment start callback failed", exc_info=True)
 
                     agent = self.agent_factory()
-                    results_before_count = len(load_results(workdir))
+                    _results_lock = FileLock(str(workdir / ".research" / "results.tsv.lock"), timeout=10)
+                    with _results_lock:
+                        results_before_count = len(load_results(workdir))
                     timed_out = False
 
                     def _on_timeout() -> None:
@@ -1330,7 +1372,7 @@ class WorkerManager:
                         if self._plugins.failure_memory is not None and memory_context is not None:
                             self._plugins.failure_memory.record(memory_context, run_code)
                     except Exception as exc:
-                        logger.debug("Failure memory record failed: %s", exc)
+                        logger.info("Failure memory record failed: %s", exc)
                     if workspace is not None:
                         try:
                             workspace.cleanup()
@@ -1357,7 +1399,10 @@ class WorkerManager:
                     finally:
                         try:
                             if self._plugins.gpu_allocator is not None and allocation is not None:
-                                self._plugins.gpu_allocator.release(allocation)
+                                try:
+                                    self._plugins.gpu_allocator.release(allocation)
+                                except Exception:
+                                    logger.error("GPU release failed for allocation %s", allocation, exc_info=True)
                         finally:
                             self._release_claim_slot()
                     if notify_finished and self._on_experiment_finished is not None:

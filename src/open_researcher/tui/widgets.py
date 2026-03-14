@@ -8,6 +8,7 @@ import re
 
 from rich.markup import escape
 from textual.app import ComposeResult
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Input, OptionList, Static
@@ -599,7 +600,7 @@ class ProjectedBacklogPanel(Static):
                 self.query_one("#frontier-header", Static).update(_empty_state("frontier data"))
                 self.query_one("#frontier-options", OptionList).set_options([])
                 self.query_one("#frontier-active", Static).update("")
-            except Exception:
+            except (NoMatches, AttributeError, KeyError):
                 logger.debug("Error updating empty frontier panel", exc_info=True)
             return
 
@@ -659,8 +660,11 @@ class ProjectedBacklogPanel(Static):
                 # Remember the currently highlighted frontier so we can
                 # restore it after replacing the option set.
                 prev_highlighted = None
-                if option_list.highlighted is not None and 0 <= option_list.highlighted < option_list.option_count:
-                    prev_highlighted = option_list.options[option_list.highlighted].id
+                try:
+                    if option_list.highlighted is not None and 0 <= option_list.highlighted < option_list.option_count:
+                        prev_highlighted = option_list.options[option_list.highlighted].id
+                except (IndexError, AttributeError):
+                    prev_highlighted = None
                 option_list.set_options(options)
                 # Restore previous highlight position if it still exists,
                 # otherwise fall back to the first option.
@@ -673,9 +677,10 @@ class ProjectedBacklogPanel(Static):
                             break
                 if not restored:
                     option_list.highlighted = 0 if options else None
-                    self._update_active(frontiers[0].frontier_id)
+                    if frontiers:
+                        self._update_active(frontiers[0].frontier_id)
             # If IDs unchanged, leave the OptionList (and its highlight) alone.
-        except Exception:
+        except (NoMatches, AttributeError, KeyError, IndexError):
             logger.debug("Error updating frontier panel", exc_info=True)
 
     def update_items(self, ideas: list[dict]) -> None:
@@ -728,7 +733,7 @@ class FrontierFocusPanel(ProjectedBacklogPanel):
             return
         try:
             option_list = self.query_one("#frontier-options", OptionList)
-        except Exception:
+        except NoMatches:
             return
         for index, option in enumerate(option_list.options):
             if option.id == frontier_id:
@@ -818,13 +823,13 @@ class FrontierDetailPanel(Static):
     def _set_block(self, selector: str, text: str) -> None:
         try:
             self.query_one(selector, Static).update(text)
-        except Exception:
+        except (NoMatches, AttributeError):
             logger.debug("Error updating detail block %s", selector, exc_info=True)
 
     def _set_title(self, selector: str, title: str) -> None:
         try:
             self.query_one(selector, Collapsible).title = title
-        except Exception:
+        except (NoMatches, AttributeError):
             logger.debug("Error updating detail section title %s", selector, exc_info=True)
 
     def update_detail(self, detail: FrontierDetail | None) -> None:
@@ -1209,7 +1214,7 @@ class DocsSidebarPanel(Static):
                 self.query_one("#docs-recent", Static).update("")
                 self.query_one("#docs-options", OptionList).set_options([])
                 self.query_one("#docs-preview", Static).update("")
-            except Exception:
+            except (NoMatches, AttributeError, KeyError):
                 logger.debug("Error updating empty docs sidebar", exc_info=True)
             return
 
@@ -1240,7 +1245,7 @@ class DocsSidebarPanel(Static):
             self._rebuild_options(current_file)
             self._render_recent()
             self._update_preview(current_file)
-        except Exception:
+        except (NoMatches, AttributeError, KeyError):
             logger.debug("Error updating docs sidebar", exc_info=True)
 
     def _remember_recent(self, filename: str) -> None:
@@ -1345,7 +1350,7 @@ class DocsSidebarPanel(Static):
             return
         try:
             option_list = self.query_one("#docs-options", OptionList)
-        except Exception:
+        except NoMatches:
             return
         for index, option in enumerate(option_list.options):
             if option.id == filename:
@@ -1497,7 +1502,7 @@ class MetricChart(Static):
             plot_widget = self.query_one("#plotext-inner", PlotextPlot)
             plot_widget.plt.title("Research Metric")
             plot_widget.refresh()
-        except Exception:
+        except (ImportError, NoMatches, AttributeError):
             logger.debug("Error initializing metric chart", exc_info=True)
 
     def update_data(self, rows: list[dict], metric_name: str = "metric") -> None:
@@ -1510,7 +1515,7 @@ class MetricChart(Static):
             from textual_plotext import PlotextPlot
 
             plot_widget = self.query_one("#plotext-inner", PlotextPlot)
-        except Exception:
+        except (ImportError, NoMatches):
             return
 
         p = plot_widget.plt
@@ -1732,7 +1737,7 @@ class DocViewer(Static):
 
                 pool = IdeaBacklog(self.research_dir / "idea_pool.json")
                 return render_ideas_markdown(pool.all_ideas())
-            except Exception:
+            except (ImportError, OSError, json.JSONDecodeError, KeyError, TypeError):
                 logger.debug("Error reading projected backlog", exc_info=True)
                 return "# Projected Backlog\n\n*Error loading projected backlog.*\n"
         if filename == "research_graph.md":
@@ -1749,7 +1754,7 @@ class DocViewer(Static):
             return f"# {title}\n\n*File not found: {source_file}*\n"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             logger.debug("Error reading %s", source_file, exc_info=True)
             return f"# {title}\n\n*Error loading {source_file}.*\n"
 
@@ -1833,7 +1838,7 @@ class DocViewer(Static):
             result = md_widget.update(content)
             if result is not None:
                 await result
-        except Exception:
+        except (ImportError, NoMatches, AttributeError):
             logger.debug("Error updating doc content", exc_info=True)
 
     async def _load_doc(self, filename: str) -> None:
@@ -1850,7 +1855,7 @@ class DocViewer(Static):
             result = md_widget.update(content)
             if result is not None:
                 await result
-        except Exception:
+        except (ImportError, NoMatches, AttributeError):
             logger.debug("Error updating doc content", exc_info=True)
 
     async def select_doc(self, filename: str) -> None:
@@ -1865,7 +1870,7 @@ class DocViewer(Static):
             select = self.query_one("#doc-select", Select)
             if select.value != filename:
                 select.value = filename
-        except Exception:
+        except (ImportError, NoMatches, AttributeError):
             logger.debug("Error syncing doc select", exc_info=True)
 
     async def on_select_changed(self, event) -> None:

@@ -1,6 +1,7 @@
 """Idea backlog for default flow plus concurrent claim support for parallel workers."""
 
 import copy
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from open_researcher.resource_scheduler import (
     sort_pending_ideas,
 )
 from open_researcher.storage import atomic_write_json, locked_read_json, locked_update_json
+
+logger = logging.getLogger(__name__)
 
 
 def _default_pool() -> dict:
@@ -173,6 +176,15 @@ class IdeaBacklog:
                     current = str(idea.get("claim_token") or idea.get("finished_claim_token") or "")
                     if current != str(claim_token):
                         return False
+                    claimed_at = idea.get("claimed_at") or idea.get("started_at")
+                    if claimed_at:
+                        try:
+                            age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(claimed_at)).total_seconds()
+                            if age_seconds > 1800:  # 30 minutes
+                                logger.warning("Claim token for %s expired (age=%.0fs)", idea.get("id"), age_seconds)
+                                return False
+                        except (ValueError, TypeError):
+                            pass
                 idea["status"] = "done"
                 idea["result"] = {"metric_value": metric_value, "verdict": verdict}
                 if isinstance(resource_observation, dict) and resource_observation:
@@ -218,7 +230,19 @@ class IdeaPool(IdeaBacklog):
         try:
             current_seq = int(raw_seq)
         except (TypeError, ValueError):
-            current_seq = 0
+            # Recover from corrupted seq by scanning existing tokens
+            ideas = data.get("ideas", data.get("backlog", []))
+            max_found = 0
+            for idea in ideas:
+                token = str(idea.get("claim_token") or idea.get("finished_claim_token") or "")
+                if token.startswith("claim-"):
+                    try:
+                        seq_part = int(token.split(":")[0].replace("claim-", ""))
+                        max_found = max(max_found, seq_part)
+                    except (ValueError, IndexError):
+                        pass
+            current_seq = max_found
+            logger.warning("claim_token_seq corrupted (was %r), recovered to %d", raw_seq, current_seq)
         next_seq = max(current_seq, 0) + 1
         data["claim_token_seq"] = next_seq
         return next_seq, f"claim-{next_seq:09d}:{worker_id}"
@@ -281,8 +305,18 @@ class IdeaPool(IdeaBacklog):
             for idea in data["ideas"]:
                 if idea["id"] != idea_id:
                     continue
-                if claim_token is not None and str(idea.get("claim_token") or "") != str(claim_token):
-                    return False
+                if claim_token is not None:
+                    if str(idea.get("claim_token") or "") != str(claim_token):
+                        return False
+                    claimed_at = idea.get("claimed_at") or idea.get("started_at")
+                    if claimed_at:
+                        try:
+                            age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(claimed_at)).total_seconds()
+                            if age_seconds > 1800:  # 30 minutes
+                                logger.warning("Claim token for %s expired (age=%.0fs)", idea.get("id"), age_seconds)
+                                return False
+                        except (ValueError, TypeError):
+                            pass
                 idea["status"] = status
                 if experiment is not None:
                     idea["assigned_experiment"] = experiment
@@ -317,6 +351,15 @@ class IdeaPool(IdeaBacklog):
                     current = str(idea.get("claim_token") or idea.get("finished_claim_token") or "")
                     if current != str(claim_token):
                         return False
+                    claimed_at = idea.get("claimed_at") or idea.get("started_at")
+                    if claimed_at:
+                        try:
+                            age_seconds = (datetime.now(timezone.utc) - datetime.fromisoformat(claimed_at)).total_seconds()
+                            if age_seconds > 1800:  # 30 minutes
+                                logger.warning("Claim token for %s expired (age=%.0fs)", idea.get("id"), age_seconds)
+                                return False
+                        except (ValueError, TypeError):
+                            pass
                 idea["status"] = "done"
                 idea["result"] = {"metric_value": metric_value, "verdict": verdict}
                 if isinstance(resource_observation, dict) and resource_observation:

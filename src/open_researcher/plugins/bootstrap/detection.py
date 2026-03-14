@@ -1,10 +1,13 @@
 """Repository and environment detection for bootstrapping."""
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,19 +67,24 @@ def detect_python_env(path: Path) -> str | None:
     for venv_dir in [".venv", "venv", "env"]:
         python = path / venv_dir / _venv_bin / _python_name
         if python.exists():
+            logger.debug("Detected Python via venv: %s", python)
             return str(python)
 
     # Check for conda env
     conda_python = path / "conda_env" / _venv_bin / _python_name
     if conda_python.exists():
+        logger.debug("Detected Python via conda env: %s", conda_python)
         return str(conda_python)
 
     # Fall back to system python
     if shutil.which("python3"):
+        logger.debug("Falling back to system python3")
         return "python3"
     if shutil.which("python"):
+        logger.debug("Falling back to system python")
         return "python"
 
+    logger.debug("No Python executable detected")
     return None
 
 
@@ -88,3 +96,7 @@ class CommandInfo:
     description: str = ""
     optional: bool = False
     env: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.command:
+            raise ValueError("CommandInfo.command must be non-empty")

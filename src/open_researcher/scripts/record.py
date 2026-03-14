@@ -151,9 +151,21 @@ def main():
 
     lock = FileLock(str(results_path) + ".lock")
     with lock:
-        # Create file with header if it doesn't exist
+        # Create file with header if it doesn't exist or header is missing
+        needs_header = False
         if not results_path.exists():
             results_path.parent.mkdir(parents=True, exist_ok=True)
+            needs_header = True
+        elif results_path.stat().st_size > 0:
+            with results_path.open("r") as f:
+                first_line = f.readline().strip()
+            if not first_line.startswith("timestamp\t"):
+                # Header missing — prepend it
+                existing = results_path.read_text()
+                header_line = "\t".join(header) + "\n"
+                results_path.write_text(header_line + existing)
+
+        if needs_header:
             with results_path.open("w", newline="") as f:
                 writer = csv.writer(f, delimiter="\t")
                 writer.writerow(header)

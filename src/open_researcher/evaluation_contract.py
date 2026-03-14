@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
 
 from open_researcher.config import ResearchConfig
 from open_researcher.plugins.storage.file_ops import atomic_write_text
+
+logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_MARKERS = (
     "<!-- e.g.",
@@ -82,8 +85,12 @@ def infer_primary_metric(cfg: ResearchConfig, graph_payload: dict | None = None)
         metric_name = str(repo_profile.get("primary_metric", "")).strip()
     if not direction:
         direction = str(repo_profile.get("direction", "")).strip()
+    if metric_name and len(metric_name) > 64:
+        logger.warning("metric_name too long (%d chars), truncating", len(metric_name))
+        metric_name = metric_name[:64]
     if metric_name and not direction:
-        direction = "higher_is_better"
+        _LOWER_METRICS = {"loss", "val_loss", "error", "perplexity", "cer", "wer", "mae", "mse", "rmse"}
+        direction = "lower_is_better" if metric_name.lower() in _LOWER_METRICS else "higher_is_better"
     return metric_name, direction
 
 

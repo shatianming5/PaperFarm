@@ -2,8 +2,11 @@
 
 import csv
 import json as json_mod
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from filelock import FileLock
 from rich.console import Console
@@ -37,6 +40,10 @@ def load_results(repo_path: Path) -> list[dict]:
         return []
     try:
         with results_path.open() as f:
+            first_line = f.readline()
+            if not first_line.strip().startswith("timestamp\t"):
+                return []  # missing or corrupted header
+            f.seek(0)
             return list(csv.DictReader(f, delimiter="\t"))
     except (OSError, UnicodeDecodeError):
         return []
@@ -82,6 +89,10 @@ def augment_result_secondary_metrics(repo_path: Path, *, row: dict | None, patch
             return False
         if not fieldnames or not rows:
             return False
+        required_cols = {"timestamp", "status", "metric_value"}
+        if not required_cols.issubset(set(fieldnames)):
+            logger.warning("results.tsv schema mismatch: missing %s", required_cols - set(fieldnames))
+            return False
 
         updated = False
         for candidate in reversed(rows):
@@ -95,10 +106,12 @@ def augment_result_secondary_metrics(repo_path: Path, *, row: dict | None, patch
         if not updated:
             return False
 
-        with results_path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
-            writer.writeheader()
-            writer.writerows(rows)
+        import io
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(rows)
+        atomic_write_text(results_path, buf.getvalue())
     return True
 
 
@@ -193,10 +206,11 @@ def write_final_results_tsv(repo_path: Path) -> None:
     lines = ["\t".join(header)]
     for row in rows:
         values = [str(row.get(key, "")) for key in header]
-        escaped = [
-            '"' + value.replace('"', '""') + '"' if "\t" in value or "\n" in value else value for value in values
-        ]
-        lines.append("\t".join(escaped))
+        import io as _io
+        _row_buf = _io.StringIO()
+        _row_writer = csv.writer(_row_buf, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
+        _row_writer.writerow(values)
+        lines.append(_row_buf.getvalue().rstrip("\r\n"))
     atomic_write_text(repo_path / ".research" / "final_results.tsv", "\n".join(lines) + "\n")
 
 

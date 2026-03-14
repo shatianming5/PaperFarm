@@ -67,15 +67,26 @@ class ResearchMemoryStore:
     ) -> dict:
         """Derive compact ideation and experiment memories from graph state."""
         profile = repo_profile or graph.get("repo_profile", {})
+        if not isinstance(profile, dict):
+            profile = {}
         profile_key = str(profile.get("profile_key", "general_code")).strip() or "general_code"
+        raw_hypotheses = graph.get("hypotheses", [])
+        if not isinstance(raw_hypotheses, list):
+            raw_hypotheses = []
+        raw_frontier = graph.get("frontier", [])
+        if not isinstance(raw_frontier, list):
+            raw_frontier = []
+        raw_evidence = graph.get("evidence", [])
+        if not isinstance(raw_evidence, list):
+            raw_evidence = []
         hypotheses = {
-            str(item.get("id", "")).strip(): item for item in graph.get("hypotheses", []) if isinstance(item, dict)
+            str(item.get("id", "")).strip(): item for item in raw_hypotheses if isinstance(item, dict)
         }
         frontier = {
-            str(item.get("id", "")).strip(): item for item in graph.get("frontier", []) if isinstance(item, dict)
+            str(item.get("id", "")).strip(): item for item in raw_frontier if isinstance(item, dict)
         }
         evidence = {
-            str(item.get("id", "")).strip(): item for item in graph.get("evidence", []) if isinstance(item, dict)
+            str(item.get("id", "")).strip(): item for item in raw_evidence if isinstance(item, dict)
         }
 
         def _do(data):
@@ -93,7 +104,10 @@ class ResearchMemoryStore:
                     }
                 )
 
-            for update in graph.get("claim_updates", []):
+            raw_claim_updates = graph.get("claim_updates", [])
+            if not isinstance(raw_claim_updates, list):
+                raw_claim_updates = []
+            for update in raw_claim_updates:
                 if not isinstance(update, dict):
                     continue
                 update_id = str(update.get("id", "")).strip()
@@ -123,7 +137,10 @@ class ResearchMemoryStore:
                     )
                 normalized["seen_claim_updates"].append(update_id)
 
-            for row in graph.get("evidence", []):
+            raw_evidence_rows = graph.get("evidence", [])
+            if not isinstance(raw_evidence_rows, list):
+                raw_evidence_rows = []
+            for row in raw_evidence_rows:
                 if not isinstance(row, dict):
                     continue
                 evidence_id = str(row.get("id", "")).strip()

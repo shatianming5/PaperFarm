@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from filelock import FileLock
+
 from open_researcher.workspace_paths import (
     OVERLAY_MANIFEST_FILENAME,
     normalize_relative_path,
@@ -138,7 +140,11 @@ def _replace_research_dir(worktree_path: Path, research_dir: Path) -> None:
         wt_research.unlink()
     elif wt_research.is_dir():
         shutil.rmtree(wt_research)
-    os.symlink(str(research_dir.resolve()), str(wt_research))
+    # Use temp symlink + rename for atomicity
+    tmp_link = wt_research.with_suffix(".tmp_symlink")
+    tmp_link.unlink(missing_ok=True)
+    os.symlink(str(research_dir.resolve()), str(tmp_link))
+    tmp_link.rename(wt_research)
 
 
 def _ensure_worktree_exclude_patterns(worktree_path: Path, patterns: tuple[str, ...]) -> None:
@@ -164,7 +170,7 @@ def _git_info_exclude_paths(repo_path: Path) -> list[Path]:
             cwd=str(repo_path),
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
         if result.returncode != 0:
             continue
@@ -339,7 +345,10 @@ def _write_overlay_manifest(worktree_path: Path, overlay_paths: list[Path]) -> N
             continue
         payload["paths"][relative_path.as_posix()] = entry
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("Failed to write worktree manifest: %s", exc)
 
 
 def _git_overlay_manifest_path(repo_path: Path) -> Path | None:
@@ -351,43 +360,47 @@ def _git_overlay_manifest_path(repo_path: Path) -> Path | None:
 
 def remove_worktree(repo_path: Path, worktree_path: Path) -> None:
     """Remove a git worktree and its branch."""
-    wt_name = worktree_path.name
-    branch_name = f"or-worker-{wt_name}"
-    _run_git(repo_path, "worktree", "prune")
+    worktrees_root = worktree_path.parent
+    lock_path = worktrees_root / ".cleanup.lock" if worktrees_root.exists() else repo_path / ".research" / "worktree_cleanup.lock"
+    lock = FileLock(str(lock_path), timeout=60)
+    with lock:
+        wt_name = worktree_path.name
+        branch_name = f"or-worker-{wt_name}"
+        _run_git(repo_path, "worktree", "prune")
 
-    # Remove the shared .research symlink first (git worktree remove dislikes it)
-    wt_research = worktree_path / ".research"
-    if wt_research.is_symlink() or wt_research.is_file():
-        wt_research.unlink()
-    elif wt_research.is_dir():
-        shutil.rmtree(wt_research, ignore_errors=True)
+        # Remove the shared .research symlink first (git worktree remove dislikes it)
+        wt_research = worktree_path / ".research"
+        if wt_research.is_symlink() or wt_research.is_file():
+            wt_research.unlink()
+        elif wt_research.is_dir():
+            shutil.rmtree(wt_research, ignore_errors=True)
 
-    if worktree_path.exists():
-        result = subprocess.run(
-            ["git", "worktree", "remove", "--force", str(worktree_path)],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0 and worktree_path.exists():
-            shutil.rmtree(worktree_path, ignore_errors=True)
         if worktree_path.exists():
-            detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
-            raise WorktreeError(f"Failed to remove worktree {worktree_path}: {detail}")
+            result = subprocess.run(
+                ["git", "worktree", "remove", "--force", str(worktree_path)],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0 and worktree_path.exists():
+                shutil.rmtree(worktree_path, ignore_errors=True)
+            if worktree_path.exists():
+                detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+                raise WorktreeError(f"Failed to remove worktree {worktree_path}: {detail}")
 
-    _run_git(repo_path, "worktree", "prune")
-    if _branch_exists(repo_path, branch_name):
-        _run_git(repo_path, "branch", "-D", branch_name)
+        _run_git(repo_path, "worktree", "prune")
+        if _branch_exists(repo_path, branch_name):
+            _run_git(repo_path, "branch", "-D", branch_name)
 
-    root = worktree_path.parent
-    if root.exists() and root.name.startswith(_WORKTREE_ROOT_PREFIX):
-        try:
-            next(root.iterdir())
-        except StopIteration:
-            root.rmdir()
+        root = worktree_path.parent
+        if root.exists() and root.name.startswith(_WORKTREE_ROOT_PREFIX):
+            try:
+                next(root.iterdir())
+            except StopIteration:
+                root.rmdir()
 
-    logger.debug("Removed worktree %s", worktree_path)
+        logger.debug("Removed worktree %s", worktree_path)
 
 
 def _branch_exists(repo_path: Path, branch_name: str) -> bool:
@@ -396,7 +409,7 @@ def _branch_exists(repo_path: Path, branch_name: str) -> bool:
         cwd=str(repo_path),
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
     )
     return result.returncode == 0
 

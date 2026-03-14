@@ -385,7 +385,9 @@ def _build_frontier_detail(
     current_value: float | None,
     global_best_value: float | None,
 ) -> FrontierDetail:
+    hypothesis = hypothesis or {}
     hypothesis = hypothesis if isinstance(hypothesis, dict) else {}
+    spec = spec or {}
     spec = spec if isinstance(spec, dict) else {}
     metric_values = [
         v
@@ -704,6 +706,18 @@ def build_dashboard_state(
     claims_rows = [row for row in graph_payload.get("claim_updates", []) if isinstance(row, dict)]
     branch_relations = [row for row in graph_payload.get("branch_relations", []) if isinstance(row, dict)]
 
+    # Single-pass: build frontier_id indexes and collect tail items together
+    evidence_by_frontier: dict[str, list[dict]] = {}
+    for row in evidence_rows:
+        fid = str(row.get("frontier_id", "")).strip()
+        if fid:
+            evidence_by_frontier.setdefault(fid, []).append(row)
+    claims_by_frontier: dict[str, list[dict]] = {}
+    for row in claims_rows:
+        fid = str(row.get("frontier_id", "")).strip()
+        if fid:
+            claims_by_frontier.setdefault(fid, []).append(row)
+
     evidence_items = [
         EvidenceItem(
             evidence_id=str(row.get("id", "")).strip(),
@@ -733,18 +747,6 @@ def build_dashboard_state(
         for row in claims_rows[-4:]
     ]
     claim_items.reverse()
-
-    # Pre-build frontier_id indexes to avoid O(n*m) per-card filtering
-    evidence_by_frontier: dict[str, list[dict]] = {}
-    for row in evidence_rows:
-        fid = str(row.get("frontier_id", "")).strip()
-        if fid:
-            evidence_by_frontier.setdefault(fid, []).append(row)
-    claims_by_frontier: dict[str, list[dict]] = {}
-    for row in claims_rows:
-        fid = str(row.get("frontier_id", "")).strip()
-        if fid:
-            claims_by_frontier.setdefault(fid, []).append(row)
 
     frontier_details: dict[str, FrontierDetail] = {}
     for card in frontiers:

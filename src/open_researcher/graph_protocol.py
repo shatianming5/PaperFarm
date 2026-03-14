@@ -2,28 +2,28 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from jinja2 import Environment, PackageLoader
+from jinja2 import Environment, PackageLoader, select_autoescape
 
 from open_researcher.config import ResearchConfig
 from open_researcher.research_graph import ResearchGraphStore
 from open_researcher.research_memory import ResearchMemoryStore
 from open_researcher.role_programs import ensure_internal_role_programs
+from open_researcher.storage import atomic_write_json, atomic_write_text
 
 
 def ensure_graph_protocol_artifacts(research_dir: Path) -> None:
     """Backfill research-v1 files for existing research directories."""
-    env = Environment(loader=PackageLoader("open_researcher", "templates"))
+    env = Environment(loader=PackageLoader("open_researcher", "templates"), autoescape=select_autoescape())
     scout_path = research_dir / "scout_program.md"
     if not scout_path.exists():
-        scout_path.write_text(env.get_template("scout_program.md.j2").render({}))
+        atomic_write_text(scout_path, env.get_template("scout_program.md.j2").render({}))
     ensure_internal_role_programs(research_dir, env=env)
 
     progress_path = research_dir / "experiment_progress.json"
     if not progress_path.exists():
-        progress_path.write_text(json.dumps({"phase": "init"}, indent=2))
+        atomic_write_json(progress_path, {"phase": "init"})
 
     ResearchGraphStore(research_dir / "research_graph.json").ensure_exists()
     ResearchMemoryStore(research_dir / "research_memory.json").ensure_exists()

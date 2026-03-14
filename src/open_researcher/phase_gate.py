@@ -1,10 +1,13 @@
 """Phase gate -- pause for human review in collaborative mode."""
 
 import json
+import logging
 import threading
 from pathlib import Path
 
 from open_researcher.control_plane import issue_control_command
+
+logger = logging.getLogger(__name__)
 
 
 class PhaseGate:
@@ -20,7 +23,8 @@ class PhaseGate:
             return "init"
         try:
             return json.loads(path.read_text()).get("phase", "init")
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error("experiment_progress.json corrupted: %s, defaulting to init", exc)
             return "init"
 
     def check(self) -> str | None:

@@ -230,7 +230,14 @@ def parse_research_state(repo_path: Path) -> dict:
     rows = []
     if results_path.exists():
         with results_path.open() as f:
-            rows = list(csv.DictReader(f, delimiter="\t"))
+            first_line = f.readline()
+            # Guard against missing header — if first line looks like data, skip it
+            if first_line.strip().startswith("timestamp\t"):
+                f.seek(0)
+                rows = list(csv.DictReader(f, delimiter="\t"))
+            else:
+                # No valid header; treat entire file as unreadable
+                rows = []
 
     state["total"] = len(rows)
     state["keep"] = sum(1 for r in rows if r.get("status") == "keep")

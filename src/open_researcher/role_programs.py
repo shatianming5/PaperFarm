@@ -7,6 +7,8 @@ from typing import Literal
 
 from jinja2 import Environment, PackageLoader
 
+from open_researcher.storage import atomic_write_text
+
 RoleProgram = Literal["manager", "critic", "experiment"]
 
 _ROLE_PROGRAM_SPECS: dict[RoleProgram, dict[str, str]] = {
@@ -71,7 +73,7 @@ def ensure_internal_role_programs(
             content = legacy_path.read_text(encoding="utf-8")
         else:
             content = template_env.get_template(spec["template"]).render(render_context)
-        internal_path.write_text(content, encoding="utf-8")
+        atomic_write_text(internal_path, content)
 
 
 def missing_role_programs(research_dir: Path) -> list[RoleProgram]:

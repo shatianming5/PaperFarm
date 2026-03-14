@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -10,6 +12,8 @@ from filelock import FileLock
 
 from open_researcher.event_journal import next_seq_unlocked, now_iso
 from open_researcher.plugins.storage.file_ops import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 ControlCommand = Literal["pause", "resume", "skip_current", "clear_skip"]
 
@@ -59,6 +63,7 @@ def _load_control_snapshot(ctrl_path: Path) -> dict:
 
     ids = merged.get("applied_command_ids", [])
     if not isinstance(ids, list):
+        logger.warning("applied_command_ids is %s, expected list; resetting", type(ids).__name__)
         ids = []
     merged["applied_command_ids"] = [str(item) for item in ids if str(item).strip()][-_IDEMPOTENCY_WINDOW:]
     return merged
@@ -99,6 +104,8 @@ def _append_event_unlocked(events_path: Path, record: dict) -> None:
     line = json.dumps(record, ensure_ascii=False)
     with events_path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _apply_state(
@@ -147,6 +154,7 @@ def _replay_control_state_unlocked(
 
     ctrl = _default_control()
     event_count = 0
+    prev_seq = None
     with events_path.open("r", encoding="utf-8") as _fh:
         for line in _fh:
             line = line.rstrip("\n")
@@ -166,6 +174,9 @@ def _replay_control_state_unlocked(
                 seq = int(record.get("control_seq", 0))
             except (TypeError, ValueError):
                 continue
+            if prev_seq is not None and seq != prev_seq + 1:
+                logger.warning("Control event sequence gap: %d -> %d", prev_seq, seq)
+            prev_seq = seq
             command = str(record.get("command", "")).strip()
             if command not in _VALID_COMMANDS:
                 continue
@@ -195,6 +206,14 @@ def read_control(ctrl_path: Path) -> dict:
             use_snapshot_fallback=True,
         )
         atomic_write_json(ctrl_path, ctrl)
+        # Warn if snapshot is stale compared to events
+        if events_path.exists() and ctrl_path.exists():
+            try:
+                age_diff = events_path.stat().st_mtime - ctrl_path.stat().st_mtime
+                if abs(age_diff) > 300:
+                    logger.warning("Control snapshot may be stale (%.0fs behind events)", age_diff)
+            except OSError:
+                pass
         return ctrl
 
 

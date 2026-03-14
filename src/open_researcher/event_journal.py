@@ -38,7 +38,8 @@ def next_seq_unlocked(path: Path) -> int:
     if not path.exists():
         return 1
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open(encoding="utf-8") as f:
+            lines = f.readlines()
     except OSError:
         return 1
     for line in reversed(lines):
@@ -60,7 +61,7 @@ class EventJournal:
     def __init__(self, path: Path, stream=None):
         self.path = path
         self._stream = stream
-        self._lock = FileLock(str(path) + ".lock")
+        self._lock = FileLock(str(path) + ".lock", timeout=10)
 
     def emit(self, level: str, phase: str, event: str, **kwargs) -> dict:
         """Write one structured event record."""
@@ -102,16 +103,15 @@ class EventJournal:
         if not self.path.exists():
             return []
         with self._lock:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-
-        records: list[dict] = []
-        for line in lines:
-            try:
-                record = json.loads(line)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if isinstance(record, dict):
-                records.append(record)
+            records: list[dict] = []
+            with self.path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(record, dict):
+                        records.append(record)
         return records
 
     def close(self) -> None:

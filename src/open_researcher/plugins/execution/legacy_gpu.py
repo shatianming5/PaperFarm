@@ -204,7 +204,7 @@ class GPUManager:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=30,
             )
         except (FileNotFoundError, OSError):
             return []
@@ -217,12 +217,15 @@ class GPUManager:
 
     def detect_remote(self, host: str, user: str) -> list[dict]:
         cmd = "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv"
-        result = subprocess.run(
-            ["ssh", f"{user}@{host}", cmd],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        try:
+            result = subprocess.run(
+                ["ssh", f"{user}@{host}", cmd],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.SubprocessError, OSError):
+            return []
         if result.returncode != 0:
             return []
         return self._parse_nvidia_smi(result.stdout, host=host)
@@ -240,13 +243,37 @@ class GPUManager:
                 if kind == "user_pin":
                     kept.append(res)
                     continue
-                # Unknown age (missing/malformed started_at): treat as stale to prevent accumulation
+                # Try created_at or reserved_at as fallback before treating as stale
                 tag = str(res.get("tag", "")).strip() or "unknown"
                 rid = str(res.get("id", "")).strip() or "?"
-                logger.warning(
-                    "Reaped GPU reservation %s with unknown age (tag=%s, ttl=%d min)",
-                    rid, tag, self.reservation_ttl_minutes,
-                )
+                fallback_resolved = False
+                for alt_field in ("created_at", "reserved_at"):
+                    alt_ts = res.get(alt_field)
+                    if alt_ts:
+                        try:
+                            alt_str = str(alt_ts).strip()
+                            if alt_str.endswith("Z"):
+                                alt_str = alt_str[:-1] + "+00:00"
+                            alt_time = datetime.fromisoformat(alt_str)
+                            if alt_time.tzinfo is None:
+                                alt_time = alt_time.replace(tzinfo=timezone.utc)
+                            alt_age = (datetime.now(timezone.utc) - alt_time).total_seconds() / 60
+                            if alt_age <= self.reservation_ttl_minutes:
+                                kept.append(res)
+                            else:
+                                logger.warning(
+                                    "Reaped GPU reservation %s via %s (age=%.0f min)",
+                                    rid, alt_field, alt_age,
+                                )
+                            fallback_resolved = True
+                            break
+                        except (ValueError, TypeError):
+                            continue
+                if not fallback_resolved:
+                    logger.warning(
+                        "Reaped GPU reservation %s with unknown age (tag=%s, ttl=%d min)",
+                        rid, tag, self.reservation_ttl_minutes,
+                    )
                 continue
             if age > self.reservation_ttl_minutes:
                 tag = str(res.get("tag", "")).strip() or "unknown"
@@ -311,7 +338,15 @@ class GPUManager:
 
     def effective_free_memory(self, gpu: dict) -> int:
         reserved = sum(int(item.get("memory_mb", 0) or 0) for item in gpu.get("reservations", []))
-        return max(int(gpu.get("memory_free", 0) or 0) - reserved, 0)
+        physical_free = int(gpu.get("memory_free", 0) or 0)
+        effective = physical_free - reserved
+        if effective < 0:
+            gpu_id = gpu.get("index", gpu.get("device", gpu.get("id", "?")))
+            logger.warning(
+                "GPU %s: reserved %dMiB > free %dMiB, data may be stale",
+                gpu_id, reserved, physical_free,
+            )
+        return max(effective, 0)
 
     def effective_free_mb(self, gpu: dict) -> int:
         return self.effective_free_memory(gpu)

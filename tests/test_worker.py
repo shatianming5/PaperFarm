@@ -223,13 +223,16 @@ def test_worker_manager_stops_on_unschedulable_pending_idea():
             runtime_plugins=WorkerRuntimePlugins(gpu_allocator=NeverFitAllocator()),
         )
 
-        wm.start()
-        wm.join(timeout=5)
+        # Patch sleep and random to make deadlock retries instant
+        with patch("open_researcher.worker.time.sleep"), \
+             patch("open_researcher.worker.random.uniform", return_value=0.0):
+            wm.start()
+            wm.join(timeout=10)
 
         assert all(not worker.is_alive() for worker in wm._workers)
-        assert wm.resource_deadlocks == 1
+        assert wm.resource_deadlocks >= 1
         assert idea_pool.summary()["pending"] == 1
-        assert any("unschedulable" in line for line in output_lines)
+        assert any("deadlock" in line.lower() for line in output_lines)
 
 
 def test_worker_manager_handles_agent_failure():

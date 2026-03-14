@@ -1,9 +1,12 @@
 """GPU detection and allocation for experiment workers."""
 from __future__ import annotations
 
+import logging
 import subprocess
 from dataclasses import dataclass
 from threading import Lock
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +31,7 @@ def discover_gpus() -> list[GPUSnapshot]:
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
         )
         if result.returncode != 0:
             return []
@@ -67,6 +70,10 @@ class GPUAllocator:
         """Allocate a GPU to a worker. Returns gpu_id or None."""
         with self._lock:
             if not self._available:
+                logger.debug(
+                    "GPU allocation failed for %s: 0 available, %d allocated, possible deadlock",
+                    worker_id, len(self._allocated),
+                )
                 return None
             gpu_id = min(self._available)  # prefer lowest id
             self._available.discard(gpu_id)
