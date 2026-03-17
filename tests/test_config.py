@@ -51,7 +51,7 @@ def test_load_config(research_dir):
     assert cfg.direction == "maximize"
     assert cfg.web_search is False
     assert cfg.search_interval == 10
-    assert cfg.remote_hosts == ["host1:8080", "host2:8080"]
+    assert cfg.remote_hosts == [{"host": "host1:8080", "user": ""}, {"host": "host2:8080", "user": ""}]
     assert cfg.enable_gpu_allocation is True
     assert cfg.enable_failure_memory is True
     assert cfg.enable_worktree_isolation is True
@@ -77,6 +77,30 @@ def test_load_config_defaults(research_dir):
     assert cfg.enable_gpu_allocation is True
     assert cfg.enable_failure_memory is True
     assert cfg.enable_worktree_isolation is True
+
+
+def test_remote_hosts_dict_form(research_dir):
+    """remote_hosts as list of dicts should be normalized."""
+    config_data = {"gpu": {"remote_hosts": [{"host": "gpu1.local", "user": "admin"}]}}
+    (research_dir / "config.yaml").write_text(yaml.dump(config_data))
+    cfg = load_config(research_dir)
+    assert cfg.remote_hosts == [{"host": "gpu1.local", "user": "admin"}]
+
+
+def test_remote_hosts_user_at_host_string(research_dir):
+    """Legacy 'user@host' string form should be normalized to {host, user} dicts."""
+    config_data = {"gpu": {"remote_hosts": ["admin@gpu1.local"]}}
+    (research_dir / "config.yaml").write_text(yaml.dump(config_data))
+    cfg = load_config(research_dir)
+    assert cfg.remote_hosts == [{"host": "gpu1.local", "user": "admin"}]
+
+
+def test_remote_hosts_bare_host_string(research_dir):
+    """Legacy bare host string should normalize with empty user."""
+    config_data = {"gpu": {"remote_hosts": ["gpu1.local"]}}
+    (research_dir / "config.yaml").write_text(yaml.dump(config_data))
+    cfg = load_config(research_dir)
+    assert cfg.remote_hosts == [{"host": "gpu1.local", "user": ""}]
 
 
 def test_load_config_max_experiments(research_dir):

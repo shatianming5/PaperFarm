@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from rich.markup import escape
@@ -30,6 +31,50 @@ from open_researcher.tui.view_model import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Terminal compatibility: honor NO_COLOR and TERM=dumb
+# ---------------------------------------------------------------------------
+_ASCII_MODE: bool | None = None
+
+
+def _use_ascii() -> bool:
+    """Return True when the terminal lacks Unicode/color support."""
+    global _ASCII_MODE
+    if _ASCII_MODE is None:
+        _ASCII_MODE = bool(
+            os.environ.get("NO_COLOR", "").strip()
+            or os.environ.get("TERM", "") == "dumb"
+        )
+    return _ASCII_MODE
+
+
+# Unicode vs ASCII icon sets
+_ICONS_UNICODE = {"keep": "✓", "discard": "✗", "crash": "💥", "play": "▶", "pause": "⏸",
+                  "scout": "🔍", "gear": "⚙", "arrow_down": "↓", "arrow_up": "▲",
+                  "arrow_dn": "▼", "bar_full": "█", "bar_empty": "░", "dot": "·",
+                  "check": "✓", "cross": "✗", "sep": "│", "arrow_right": "→",
+                  "phase_sep": "───", "bullet_filled": "●", "bullet_empty": "○",
+                  "cycle": "↺", "active_bullet": "▸", "inactive_bullet": "•",
+                  "mid_dot": "·", "tab_dot": "·",
+                  "tree_end": "└─", "tree_mid": "├─", "tree_pipe": "│  ", "tree_space": "   ",
+                  "list_bullet": "•"}
+_ICONS_ASCII = {"keep": "OK", "discard": "X", "crash": "!!", "play": ">", "pause": "||",
+                "scout": "[S]", "gear": "[*]", "arrow_down": "|", "arrow_up": "^",
+                "arrow_dn": "v", "bar_full": "#", "bar_empty": "-", "dot": ".",
+                "check": "OK", "cross": "X", "sep": "|", "arrow_right": "->",
+                "phase_sep": "---", "bullet_filled": "*", "bullet_empty": "o",
+                "cycle": "~", "active_bullet": ">", "inactive_bullet": "-",
+                "mid_dot": ".", "tab_dot": ".",
+                "tree_end": "`-", "tree_mid": "|-", "tree_pipe": "|  ", "tree_space": "   ",
+                "list_bullet": "-"}
+
+
+def _icon(name: str) -> str:
+    """Return the appropriate icon for the current terminal mode."""
+    icons = _ICONS_ASCII if _use_ascii() else _ICONS_UNICODE
+    return icons.get(name, "?")
+
 
 C_SUCCESS = "#7dd4b0"
 C_ERROR = "#ff7b72"
@@ -186,7 +231,7 @@ class StatsBar(Static):
             "experimenting": _chip("Research", fg="#08111a", bg=C_SUCCESS),
         }
 
-        sep = f" [{C_DIM}]│[/] "
+        sep = f" [{C_DIM}]{_icon('sep')}[/] "
         left: list[str] = []
         if phase in phase_badges:
             left.append(phase_badges[phase])
@@ -207,7 +252,8 @@ class StatsBar(Static):
         import time as _time
         now_str = _time.strftime("%H:%M:%S")
         if data_errors:
-            right.append(f"[{C_ERROR}]![/]")
+            _err_names = ", ".join(data_errors)
+            right.append(f"[{C_ERROR}]stale: {_err_names}[/]")
         right.append(f"[{C_DIM}]{now_str}[/]")
         line1 = "  ".join(left) + sep + "  ".join(right)
 
@@ -224,8 +270,7 @@ class StatsBar(Static):
                 line2_parts.append(f"[{C_DIM}]tokens[/] [{C_TEXT}]{tokens_used:,}[/]")
             if estimated_cost > 0:
                 line2_parts.append(f"[{C_DIM}]est.[/] [{C_SECONDARY}]${estimated_cost:.2f}[/]")
-        if data_errors:
-            line2_parts.append(f"[{C_ERROR}]data: {', '.join(data_errors)}[/]")
+        # data_errors already shown in line1 as "stale: ..." — no duplication needed
 
         self.stats_text = line1 + ("\n" + "  ".join(line2_parts) if line2_parts else "")
 
@@ -254,18 +299,18 @@ class PhaseStripBar(Static):
             label = _PHASE_LABELS[step]
             if i < active_idx:
                 # Completed
-                parts.append(f"[{C_SUCCESS}]✓ {label}[/]")
+                parts.append(f"[{C_SUCCESS}]{_icon('check')} {label}[/]")
             elif i == active_idx:
                 # Current
                 if paused:
-                    parts.append(f"[bold {C_CORAL}]⏸ {label}[/]")
+                    parts.append(f"[bold {C_CORAL}]{_icon('pause')} {label}[/]")
                 else:
-                    parts.append(f"[bold {C_PRIMARY}]● {label}[/]")
+                    parts.append(f"[bold {C_PRIMARY}]{_icon('dot')} {label}[/]")
             else:
                 # Future
-                parts.append(f"[{C_DIM}]○ {label}[/]")
+                parts.append(f"[{C_DIM}]{_icon('bullet_empty')} {label}[/]")
 
-        sep = f"  [{C_DIM}]───[/]  "
+        sep = f"  [{C_DIM}]{_icon('phase_sep')}[/]  "
         self.phase_text = "  " + sep.join(parts)
 
 
@@ -293,7 +338,8 @@ class SessionChromeBar(Static):
             bar_w = 24
             if total > 0:
                 filled = min(int(bar_w * completed / max(total, 1)), bar_w)
-                bar = f"[{C_PRIMARY}]{'█' * filled}[/][{C_DIM}]{'░' * (bar_w - filled)}[/]"
+                bf, be = _icon("bar_full"), _icon("bar_empty")
+                bar = f"[{C_PRIMARY}]{bf * filled}[/][{C_DIM}]{be * (bar_w - filled)}[/]"
                 text = f"  {bar}  [{C_TEXT}]{completed}/{total}[/]"
                 return text + (f"  [{C_DIM}]{suffix}[/]" if suffix else "")
             return f"  [{C_DIM}]No experiments yet[/]"
@@ -307,11 +353,11 @@ class SessionChromeBar(Static):
                 d = chrome.current_value - chrome.baseline_value
                 improved = d < 0 if chrome.direction == "lower_is_better" else d > 0
                 color = C_SUCCESS if improved else C_CORAL
-                arrow = "▼" if d < 0 else "▲"
+                arrow = _icon("arrow_dn") if d < 0 else _icon("arrow_up")
                 delta = f" [{color}]({arrow}{abs(d):.4f})[/]"
             return (
                 f"  [{C_DIM}]{metric_name}:[/] "
-                f"[{C_DIM}]baseline[/] [{C_INFO}]{baseline}[/] → "
+                f"[{C_DIM}]baseline[/] [{C_INFO}]{baseline}[/] {_icon('arrow_right')} "
                 f"[{C_DIM}]current[/] [{C_SECONDARY}]{current}[/]{delta}  "
                 f"[{C_DIM}]best[/] [bold {C_BEST}]{best}[/]"
             )
@@ -332,13 +378,13 @@ class SessionChromeBar(Static):
                     parts.append(f"[{C_DIM}]{name}[/]")
                 else:
                     color = _status_color(r.status)
-                    parts.append(f"[bold {color}]▶ {name}[/]")
-            return f"  [{C_DIM}]│[/] " + f" [{C_DIM}]→[/] ".join(parts) if parts else ""
+                    parts.append(f"[bold {color}]{_icon('play')} {name}[/]")
+            return f"  [{C_DIM}]{_icon('sep')}[/] " + f" [{C_DIM}]{_icon('arrow_right')}[/] ".join(parts) if parts else ""
 
         # State F: Paused (highest priority)
         if chrome.paused:
             self.chrome_text = "\n".join(filter(None, [
-                f"[bold {C_CORAL}]⏸ PAUSED[/] [{C_DIM}]— Press [bold {C_INFO}]r[/][{C_DIM}] to resume[/]",
+                f"[bold {C_CORAL}]{_icon('pause')} PAUSED[/] [{C_DIM}]— Press [bold {C_INFO}]r[/][{C_DIM}] to resume[/]",
                 self._last_result_line(chrome),
                 _progress() + _pipeline(),
             ]))
@@ -348,7 +394,7 @@ class SessionChromeBar(Static):
         if phase == "scouting":
             detail = escape((active_role.detail if active_role else "") or "Analyzing repository structure")
             self.chrome_text = "\n".join(filter(None, [
-                f"[bold {C_PRIMARY}]🔍 Scout Agent[/] [{C_DIM}]— Analyzing repository[/]",
+                f"[bold {C_PRIMARY}]{_icon('scout')} Scout Agent[/] [{C_DIM}]— Analyzing repository[/]",
                 f"  [{C_TEXT}]{detail}[/]",
                 _pipeline(),
             ]))
@@ -358,7 +404,7 @@ class SessionChromeBar(Static):
         if phase == "preparing":
             detail = escape((active_role.detail if active_role else "") or "Installing dependencies")
             self.chrome_text = "\n".join(filter(None, [
-                f"[bold {C_WARNING}]⚙ Repo Prepare[/] [{C_DIM}]— Setting up environment[/]",
+                f"[bold {C_WARNING}]{_icon('gear')} Repo Prepare[/] [{C_DIM}]— Setting up environment[/]",
                 f"  [{C_TEXT}]{detail}[/]",
                 _pipeline(),
             ]))
@@ -367,7 +413,7 @@ class SessionChromeBar(Static):
         # State E: Reviewing
         if phase == "reviewing":
             self.chrome_text = "\n".join(filter(None, [
-                f"[bold {C_SKY}]⏸ Review Gate[/] [{C_DIM}]— Waiting for operator confirmation[/]",
+                f"[bold {C_SKY}]{_icon('pause')} Review Gate[/] [{C_DIM}]— Waiting for operator confirmation[/]",
                 f"  [{C_DIM}]Approve the research plan to start experimenting[/]",
                 _pipeline(),
             ]))
@@ -383,7 +429,7 @@ class SessionChromeBar(Static):
                 fg="#08111a",
                 bg=_status_color(active_role.status),
             )
-            line1 = f"[bold {C_TEXT}]▶ {role_label}[/]  {status_chip}"
+            line1 = f"[bold {C_TEXT}]{_icon('play')} {role_label}[/]  {status_chip}"
             if frontier:
                 line1 += f"  [{C_PRIMARY}]{frontier}[/]"
             lines = [line1]
@@ -406,7 +452,7 @@ class SessionChromeBar(Static):
             return f"[{C_DIM}]No experiments completed yet[/]"
         verdict = chrome.last_result_verdict
         color = C_SUCCESS if verdict == "keep" else (C_WARNING if verdict == "discard" else C_ERROR)
-        icon = "✓" if verdict == "keep" else ("▸" if verdict == "discard" else "✗")
+        icon = _icon("keep") if verdict == "keep" else (_icon("discard") if verdict == "discard" else _icon("crash"))
         frontier = escape(chrome.last_result_frontier_id or "?")
         metric = _format_metric(chrome.last_result_metric)
         delta = ""
@@ -414,7 +460,7 @@ class SessionChromeBar(Static):
             d = chrome.last_result_metric - chrome.baseline_value
             improved = d < 0 if chrome.direction == "lower_is_better" else d > 0
             delta_color = C_SUCCESS if improved else C_CORAL
-            arrow = "▼" if d < 0 else "▲"
+            arrow = _icon("arrow_dn") if d < 0 else _icon("arrow_up")
             delta = f" [{delta_color}](vs baseline {arrow}{abs(d):.4f})[/]"
         return f"[{color}]{icon} Last: {frontier} {verdict}[/]  [{C_INFO}]{metric}[/]{delta}"
 
@@ -430,7 +476,7 @@ class BootstrapStatusPanel(Static):
     def update_summary(self, summary: BootstrapSummary) -> None:
         # Fold to single line when bootstrap is done
         if summary.status in ("completed", "resolved", "cached"):
-            self.summary_text = f"[{C_DIM}]Bootstrap [✓ {summary.status}][/]"
+            self.summary_text = f"[{C_DIM}]Bootstrap [{_icon('check')} {summary.status}][/]"
             return
 
         status_chip = _chip(summary.status.replace("_", " "), fg="#08111a", bg=_status_color(summary.status))
@@ -491,7 +537,7 @@ class RoleActivityPanel(Static):
             if r.key not in seen:
                 ordered.append(r)
 
-        arrow = f"  [{C_DIM}]     ↓[/]"
+        arrow = f"  [{C_DIM}]     {_icon('arrow_down')}[/]"
         for i, role in enumerate(ordered):
             if i > 0:
                 lines.append(arrow)
@@ -953,21 +999,22 @@ class FrontierDetailPanel(Static):
             summary_lines + [""] + hypothesis_lines + [""] + spec_lines + [""] + evidence_lines + [""] + claim_lines
         )
 
+        _md = _icon("mid_dot")
         self._set_title(
             "#frontier-detail-hypothesis-box",
-            f"Hypothesis · {frontier.frontier_id}",
+            f"Hypothesis {_md} {frontier.frontier_id}",
         )
         self._set_title(
             "#frontier-detail-spec-box",
-            f"Experiment Spec · {detail.experiment_spec_id or frontier.execution_id or 'selected'}",
+            f"Experiment Spec {_md} {detail.experiment_spec_id or frontier.execution_id or 'selected'}",
         )
         self._set_title(
             "#frontier-detail-evidence-box",
-            f"Metric & Evidence · {detail.metric_samples} sample(s)",
+            f"Metric & Evidence {_md} {detail.metric_samples} sample(s)",
         )
         self._set_title(
             "#frontier-detail-claims-box",
-            f"Claims · {len(detail.claims)} update(s)",
+            f"Claims {_icon('mid_dot')} {len(detail.claims)} update(s)",
         )
         self._set_block("#frontier-detail-summary", "\n".join(summary_lines))
         self._set_block("#frontier-detail-hypothesis", "\n".join(hypothesis_lines))
@@ -996,23 +1043,23 @@ class IdeaListPanel(ProjectedBacklogPanel):
             result = idea.get("result")
             verdict = result.get("verdict", "") if isinstance(result, dict) else ""
             if status == "running":
-                icon = "▶"
+                icon = _icon("play")
                 result_str = "running..."
             elif verdict == "kept" or (status == "done" and verdict != "discarded"):
-                icon = "✓"
+                icon = _icon("keep")
                 metric = result.get("metric_value") if isinstance(result, dict) else None
                 suffix = f" val={_format_metric(metric)}" if metric not in ("", None) else ""
                 result_str = f"kept{suffix}"
             elif verdict == "discarded":
-                icon = "✗"
+                icon = _icon("discard")
                 metric = result.get("metric_value") if isinstance(result, dict) else None
                 suffix = f" val={_format_metric(metric)}" if metric not in ("", None) else ""
                 result_str = f"disc{suffix}"
             elif status == "pending":
-                icon = "·"
+                icon = _icon("dot")
                 result_str = "pending"
             elif status == "skipped":
-                icon = "–"
+                icon = "-"
                 result_str = "skipped"
             else:
                 icon = "?"
@@ -1126,21 +1173,21 @@ class LineageTimelinePanel(Static):
 
         def _node_text(node_id: str) -> str:
             summary = child_summaries.get(node_id) or parent_summaries.get(node_id) or node_id
-            return f"[{C_PRIMARY}]{escape(node_id)}[/] [{C_DIM}]·[/] [{C_TEXT}]{escape(summary)}[/]"
+            return f"[{C_PRIMARY}]{escape(node_id)}[/] [{C_DIM}]{_icon('mid_dot')}[/] [{C_TEXT}]{escape(summary)}[/]"
 
         lines: list[str] = []
         visited: set[str] = set()
 
         def _walk(node_id: str, prefix: str = "") -> None:
             if node_id in visited:
-                lines.append(f"{prefix}[{C_WARNING}]↺[/] {_node_text(node_id)}")
+                lines.append(f"{prefix}[{C_WARNING}]{_icon('cycle')}[/] {_node_text(node_id)}")
                 return
             visited.add(node_id)
-            lines.append(f"{prefix}[{C_SECONDARY}]●[/] {_node_text(node_id)}")
+            lines.append(f"{prefix}[{C_SECONDARY}]{_icon('bullet_filled')}[/] {_node_text(node_id)}")
             branch_items = children.get(node_id, [])
             for index, item in enumerate(branch_items):
-                connector = "└─" if index == len(branch_items) - 1 else "├─"
-                child_prefix = f"{prefix}{'   ' if index == len(branch_items) - 1 else '│  '}"
+                connector = _icon("tree_end") if index == len(branch_items) - 1 else _icon("tree_mid")
+                child_prefix = f"{prefix}{_icon('tree_space') if index == len(branch_items) - 1 else _icon('tree_pipe')}"
                 lines.append(
                     f"{prefix}[{C_ACCENT}]{connector} {escape(item.relation)}[/] "
                     f"[{C_PRIMARY}]{escape(item.child_id or 'child')}[/]"
@@ -1232,7 +1279,7 @@ class DocsSidebarPanel(Static):
         lines = [f"[bold {C_TEXT}]Docs Navigator[/]"]
         for item in items:
             active = item.filename == current_file
-            bullet = "▸" if active else "•"
+            bullet = _icon("active_bullet") if active else _icon("inactive_bullet")
             color = C_PRIMARY if active else (C_SECONDARY if item.available else C_DIM)
             active_chip = f" {_chip('LIVE', fg='#08111a', bg=C_PRIMARY)}" if active else ""
             dynamic_chip = f" {_chip('GEN', fg='#08111a', bg=C_WARNING)}" if item.dynamic else ""
@@ -1313,7 +1360,7 @@ class DocsSidebarPanel(Static):
             item = self._doc_index.get(filename)
             title = item.title if item else filename
             lines.append(
-                f"[{C_PRIMARY}]• {_highlight_match(title, self._query, color=C_SKY)}[/] "
+                f"[{C_PRIMARY}]{_icon('list_bullet')} {_highlight_match(title, self._query, color=C_SKY)}[/] "
                 f"[{C_DIM}]{_highlight_match(filename, self._query, color=C_WARNING)}[/]"
             )
         recent_widget.update("\n".join(lines))
@@ -1411,7 +1458,8 @@ class ExperimentStatusPanel(Static):
         if total > 0:
             bar_width = 24
             filled = min(int(bar_width * completed / max(total, 1)), bar_width)
-            progress = f"[{color}]{'█' * filled}{'░' * (bar_width - filled)}[/]  [{C_DIM}]{completed}/{total}[/]"
+            bf, be = _icon("bar_full"), _icon("bar_empty")
+            progress = f"[{color}]{bf * filled}{be * (bar_width - filled)}[/]  [{C_DIM}]{completed}/{total}[/]"
 
         lines = [f"[bold {C_TEXT}]Execution Focus[/]  {label_chip}", f"[bold {C_PRIMARY}]{escape(role_label)}[/]"]
         if frontier or execution:
@@ -1461,13 +1509,14 @@ class HotkeyBar(Static):
         tab_keys: list[str] = []
         for idx, (tid, label) in enumerate(tab_names.items(), 1):
             if tid == active_tab:
-                tab_keys.append(f"[bold {C_PRIMARY}]{idx}·{label}[/]")
+                tab_keys.append(f"[bold {C_PRIMARY}]{idx}{_icon('tab_dot')}{label}[/]")
             else:
                 tab_keys.append(f"[bold {C_INFO}]{idx}[/][{C_DIM}]{label}[/]")
         keys = [
             " ".join(tab_keys),
             f"[bold {C_INFO}]g[/] [{C_DIM}]gpu[/]",
             f"[bold {C_INFO}]l[/] [{C_DIM}]log[/]",
+            f"[bold {C_INFO}]?[/] [{C_DIM}]help[/]",
             f"[bold {C_INFO}]q[/] [{C_DIM}]quit[/]",
         ]
         if paused:
@@ -1477,9 +1526,13 @@ class HotkeyBar(Static):
             keys.insert(1, f"[bold {C_INFO}]p[/] [{C_DIM}]pause[/]")
         if phase == "experimenting":
             keys.insert(2, f"[bold {C_INFO}]s[/] [{C_DIM}]skip[/]")
-            keys.insert(3, f"[bold {C_INFO}]S[/] [{C_DIM}]undo skip[/]")
+            keys.insert(3, f"[bold {C_INFO}]u[/] [{C_DIM}]undo skip[/]")
         if active_tab == "tab-docs":
             keys.insert(-1, f"[bold {C_INFO}]n[/]/[bold {C_INFO}]b[/] [{C_DIM}]next/prev doc[/]")
+        # Contextual navigation hints for list-heavy tabs
+        if active_tab in ("tab-command", "tab-docs"):
+            _ud = _icon("arrow_up") + _icon("arrow_dn") if not _use_ascii() else "Up/Dn"
+            keys.insert(-1, f"[{C_DIM}]{_ud} browse[/]")
         return "  ".join(keys)
 
 
@@ -1505,8 +1558,8 @@ class MetricChart(Static):
         except (ImportError, NoMatches, AttributeError):
             logger.debug("Error initializing metric chart", exc_info=True)
 
-    def update_data(self, rows: list[dict], metric_name: str = "metric") -> None:
-        data_hash = hash((len(rows), tuple((r.get("metric_value"), r.get("status")) for r in rows[-20:])))
+    def update_data(self, rows: list[dict], metric_name: str = "metric", direction: str = "") -> None:
+        data_hash = hash((len(rows), metric_name, direction, tuple((r.get("metric_value"), r.get("status")) for r in rows[-20:])))
         if data_hash == self._data_hash:
             return
         self._data_hash = data_hash
@@ -1551,7 +1604,7 @@ class MetricChart(Static):
                 p.scatter(sx, sy, color=color)
 
         p.hline(values[0], color="blue")
-        best = max(values)
+        best = min(values) if direction == "lower_is_better" else max(values)
         p.hline(best, color="cyan")
         p.title(f"{metric_name} trend")
         p.xlabel("Experiment #")
@@ -1575,7 +1628,7 @@ class RecentExperiments(Static):
         title = metric_name or rows[-1].get("primary_metric", "metric")
         lines = [f"[bold {C_TEXT}]Recent Results[/]  [{C_DIM}]{escape(str(title))}[/]"]
         status_style = {"keep": C_SUCCESS, "discard": C_WARNING, "crash": C_ERROR}
-        status_icon = {"keep": "✓", "discard": "▸", "crash": "✗"}
+        status_icon = {"keep": _icon("keep"), "discard": _icon("discard"), "crash": _icon("crash")}
 
         for row in rows[-6:][::-1]:
             status = str(row.get("status", "?")).strip()

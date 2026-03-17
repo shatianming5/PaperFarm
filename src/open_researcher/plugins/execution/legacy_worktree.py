@@ -11,11 +11,13 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Iterable
 
 from filelock import FileLock
 
 from open_researcher.workspace_paths import (
     OVERLAY_MANIFEST_FILENAME,
+    WORKTREE_SYMLINK_DATA_DIRS,
     normalize_relative_path,
     overlay_manifest_entry_for_path,
     runtime_git_exclude_patterns,
@@ -85,13 +87,21 @@ def worktrees_root(repo_path: Path) -> Path:
     return resolved_repo.parent / dirname
 
 
-def create_worktree(repo_path: Path, worktree_name: str) -> Path:
+def create_worktree(
+    repo_path: Path,
+    worktree_name: str,
+    *,
+    extra_symlink_dirs: Iterable[str] = (),
+) -> Path:
     """Create an isolated git worktree for a parallel worker.
 
     Creates a new branch and worktree under an external worktree root.
     Replaces the worktree's ``.research/`` directory with a directory symlink
     back to the canonical repo state so atomic writes and lock files stay
     shared across workers.
+
+    *extra_symlink_dirs* lists additional directory names in the repo root
+    that should be symlinked (not copied) into the worktree.
 
     Returns the worktree path.
     """
@@ -117,6 +127,7 @@ def create_worktree(repo_path: Path, worktree_name: str) -> Path:
         _replace_research_dir(wt_path, research_dir)
         _ensure_worktree_exclude_patterns(wt_path, _WORKTREE_EXCLUDE_PATTERNS)
         synced_overlay_paths = _sync_source_overlays(repo_path, wt_path)
+        _symlink_data_directories(repo_path, wt_path, extra_dirs=extra_symlink_dirs)
         _sanitize_runtime_artifacts(wt_path)
         _mark_runtime_artifacts_skip_worktree(wt_path)
         _write_overlay_manifest(wt_path, synced_overlay_paths)
@@ -215,6 +226,97 @@ def _sync_source_overlays(repo_path: Path, worktree_path: Path) -> list[Path]:
     return overlay_paths
 
 
+def _symlink_data_directories(
+    repo_path: Path,
+    worktree_path: Path,
+    extra_dirs: Iterable[str] = (),
+) -> None:
+    """Symlink large data directories from repo into worktree.
+
+    Directories listed in WORKTREE_SYMLINK_DATA_DIRS (plus any *extra_dirs*)
+    are symlinked rather than copied, so experiments running in isolated
+    worktrees can still access training/evaluation data without duplication.
+
+    If the target directory already exists (e.g. partially tracked by git),
+    individual children that are missing in the worktree are symlinked.
+    """
+    candidates = set(WORKTREE_SYMLINK_DATA_DIRS)
+    candidates.update(extra_dirs)
+    repo_root = repo_path.resolve()
+    wt_root = worktree_path.resolve()
+    for dirname in sorted(candidates):
+        # Security: reject path-traversal in directory names
+        if "/" in dirname or dirname in (".", "..") or dirname.startswith("."):
+            logger.warning("Skipping suspicious symlink dir name: %s", dirname)
+            continue
+        source = repo_path / dirname
+        target = worktree_path / dirname
+        if not source.is_dir() and not source.is_symlink():
+            continue
+        if target.is_symlink():
+            continue
+        if target.is_dir():
+            # Directory already exists (partially tracked by git).
+            # Symlink individual missing children from source.
+            _symlink_missing_children(source, target, repo_root=repo_root)
+            continue
+        resolved = source.resolve() if not source.is_symlink() else Path(os.readlink(source))
+        if not resolved.is_absolute():
+            resolved = (repo_path / resolved).resolve()
+        # Security: verify symlink source resolves within the repo root
+        # (prevents a repo symlink like data -> /etc from being re-exposed)
+        try:
+            resolved.relative_to(repo_root)
+        except ValueError:
+            logger.warning(
+                "Refusing to symlink directory whose source resolves outside repo: %s -> %s",
+                dirname, resolved,
+            )
+            continue
+        os.symlink(str(resolved), str(target))
+        logger.debug("Symlinked data directory %s -> %s", target, resolved)
+
+
+def _symlink_missing_children(
+    source_dir: Path, target_dir: Path, *, repo_root: Path | None = None,
+) -> None:
+    """Symlink children of *source_dir* that are missing in *target_dir*."""
+    try:
+        children = list(source_dir.iterdir())
+    except OSError:
+        return
+    target_root = target_dir.resolve()
+    for child in children:
+        # Security: reject children with path-traversal names
+        if "/" in child.name or child.name in (".", ".."):
+            logger.warning("Skipping suspicious child name: %s", child.name)
+            continue
+        target_child = target_dir / child.name
+        if target_child.exists() or target_child.is_symlink():
+            continue
+        # Security: verify target stays within target_dir
+        try:
+            target_child.resolve().relative_to(target_root)
+        except ValueError:
+            logger.warning("Refusing to symlink outside target directory: %s", target_child)
+            continue
+        resolved = child.resolve() if not child.is_symlink() else Path(os.readlink(child))
+        if not resolved.is_absolute():
+            resolved = (source_dir / resolved).resolve()
+        # Security: verify symlink source resolves within the repo root
+        if repo_root is not None:
+            try:
+                resolved.relative_to(repo_root)
+            except ValueError:
+                logger.warning("Refusing to symlink child outside repo: %s -> %s", child.name, resolved)
+                continue
+        try:
+            os.symlink(str(resolved), str(target_child))
+            logger.debug("Symlinked data child %s -> %s", target_child, resolved)
+        except OSError as exc:
+            logger.warning("Failed to symlink %s: %s", target_child, exc)
+
+
 def _iter_untracked_overlay_paths(repo_path: Path) -> list[Path]:
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"],
@@ -305,8 +407,15 @@ def _sanitize_runtime_artifacts(worktree_path: Path) -> None:
         else:
             tracked_to_restore.append(normalized)
 
+    wt_root = worktree_path.resolve()
     for path in sorted(set(untracked_to_remove), reverse=True):
-        _remove_existing_path(worktree_path / path)
+        target = (worktree_path / path).resolve()
+        try:
+            target.relative_to(wt_root)
+        except ValueError:
+            logger.warning("Refusing to remove path outside worktree: %s", path)
+            continue
+        _remove_existing_path(target)
     if tracked_to_restore:
         _run_git(worktree_path, "checkout", "--", *sorted(set(tracked_to_restore)))
 

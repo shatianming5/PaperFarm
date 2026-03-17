@@ -312,6 +312,28 @@ TabPane {
     margin-bottom: 1;
 }
 
+/* Focus styles for keyboard navigation visibility */
+Input:focus {
+    border: tall #8bd5ff;
+}
+
+Button:focus {
+    border: tall #8bd5ff;
+    text-style: bold;
+}
+
+Select:focus {
+    border: tall #8bd5ff;
+}
+
+OptionList:focus {
+    border: tall #3a7dba;
+}
+
+TextArea:focus {
+    border: tall #8bd5ff;
+}
+
 AddIdeaModal {
     align: center middle;
     background: rgba(6, 13, 21, 0.85);
@@ -319,6 +341,7 @@ AddIdeaModal {
 
 AddIdeaModal > #dialog {
     width: 60;
+    max-width: 95%;
     height: auto;
     border: heavy #235174;
     border-top: heavy #8bd5ff;
@@ -344,8 +367,10 @@ GPUStatusModal {
 
 GPUStatusModal > #gpu-dialog {
     width: 80;
+    max-width: 95%;
     height: auto;
     max-height: 80%;
+    overflow-y: auto;
     border: heavy #235174;
     border-top: heavy #8bd5ff;
     background: #08111a;
@@ -394,6 +419,7 @@ GoalInputModal {
 
 GoalInputModal > #goal-dialog {
     width: 70;
+    max-width: 95%;
     height: auto;
     border: heavy #235174;
     border-top: heavy #8bd5ff;
@@ -415,6 +441,31 @@ GoalInputModal Button {
 GoalInputModal #goal-hint {
     color: #95a6bd;
     margin: 0 0 1 0;
+}
+
+HelpModal {
+    align: center middle;
+    background: rgba(6, 13, 21, 0.85);
+}
+
+HelpModal > #help-dialog {
+    width: 60;
+    max-width: 95%;
+    height: auto;
+    border: heavy #235174;
+    border-top: heavy #8bd5ff;
+    background: #08111a;
+    padding: 1 2;
+}
+
+HelpModal Label {
+    text-style: bold;
+    color: #8bd5ff;
+    margin-bottom: 1;
+}
+
+HelpModal Button {
+    margin-top: 1;
 }
 
 ReviewScreen {

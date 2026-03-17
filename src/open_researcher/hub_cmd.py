@@ -15,6 +15,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+_ascii_mode = bool(os.environ.get("NO_COLOR", "").strip() or os.environ.get("TERM", "") == "dumb")
+
 from open_researcher.hub import (
     HUB_REGISTRY_URL,
     apply_manifest_to_config_yaml,
@@ -25,7 +27,16 @@ from open_researcher.hub import (
     manifest_to_bootstrap_overrides,
 )
 
-hub_app = typer.Typer(help="PaperFarm Hub — verified research environment registry.")
+hub_app = typer.Typer(
+    help=(
+        "PaperFarm Hub — verified research environment registry.\n\n"
+        "Typical workflow:\n"
+        "  1. hub list                   Browse available papers\n"
+        "  2. hub lookup <arxiv-id>      Inspect a paper's manifest\n"
+        "  3. hub install <arxiv-id>     Clone and setup the repo\n"
+        "  4. hub apply <arxiv-id>       Apply Hub config to .research/\n"
+    ),
+)
 console = Console()
 
 
@@ -78,9 +89,12 @@ def list_entries(
     table.add_column("Venue")
     table.add_column("Award")
     table.add_column("GPU")
-    table.add_column("✓")
+    table.add_column("OK" if _ascii_mode else "✓")
 
-    award_style = {"best-paper": "[gold1]★[/gold1]", "oral": "[green]●[/green]", "spotlight": "[blue]◆[/blue]"}
+    if _ascii_mode:
+        award_style = {"best-paper": "[gold1]*[/gold1]", "oral": "[green]o[/green]", "spotlight": "[blue]+[/blue]"}
+    else:
+        award_style = {"best-paper": "[gold1]★[/gold1]", "oral": "[green]●[/green]", "spotlight": "[blue]◆[/blue]"}
 
     for e in entries:
         venue = e.get("venue", {})
@@ -126,6 +140,20 @@ def install(
     console.print(f"\n[bold]Hub install — {arxiv_id}[/bold]")
     console.print(manifest_summary(manifest))
 
+    # Security: show remote commands and require confirmation before execution
+    commands_to_run: list[tuple[str, str]] = []
+    if install_cmd:
+        commands_to_run.append(("install_command", install_cmd))
+    if test_cmd and not skip_smoke:
+        commands_to_run.append(("test_command", test_cmd))
+    if commands_to_run:
+        console.print("\n[yellow]The following commands from the remote registry will be executed:[/yellow]")
+        for label, cmd in commands_to_run:
+            console.print(f"  [cyan]{label}[/cyan] = {cmd}")
+        if not typer.confirm("Trust and run these commands?"):
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(code=0)
+
     # Check hardware requirements
     resources = manifest.get("resources") if isinstance(manifest.get("resources"), dict) else {}
     gpu_req = str(resources.get("gpu", "none") or "none").strip().lower()
@@ -159,7 +187,9 @@ def install(
         except ValueError:
             console.print("[red]Invalid install_command in manifest (cannot parse).[/red]")
             raise typer.Exit(code=1)
-        result = subprocess.run(argv, timeout=600)
+        # Security: run with scrubbed environment to avoid leaking API keys
+        _scrubbed_env = _scrub_env(os.environ)
+        result = subprocess.run(argv, timeout=600, env=_scrubbed_env)
         if result.returncode != 0:
             exit_code = max(result.returncode, 1)
             console.print(f"[red]Install failed (exit {result.returncode}).[/red]")
@@ -178,13 +208,26 @@ def install(
     folder = _get_folder(arxiv_id, registry)
     from urllib.parse import quote
     smoke_url = f"{registry}/hub/{quote(folder, safe='')}/smoke_test.py"
-    console.print("  Fetching smoke_test.py from Hub...")
+    # Security: validate URL scheme
+    if not smoke_url.startswith("https://"):
+        console.print(f"[red]Refusing non-HTTPS smoke test URL: {smoke_url}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"  Fetching smoke_test.py from: {smoke_url}")
     try:
         with urllib.request.urlopen(smoke_url, timeout=10) as resp:
             smoke_src = resp.read().decode("utf-8")
     except (urllib.error.HTTPError, urllib.error.URLError, socket.timeout, UnicodeDecodeError, OSError) as exc:
         console.print(f"[red]Failed to fetch smoke_test.py: {exc}[/red]")
         raise typer.Exit(code=1)
+
+    # Security: show content hash so user can verify integrity
+    import hashlib
+    content_hash = hashlib.sha256(smoke_src.encode("utf-8")).hexdigest()[:16]
+    console.print(f"  SHA256 (first 16 chars): [cyan]{content_hash}[/cyan]  ({len(smoke_src)} bytes)")
+    if not typer.confirm("Trust and execute this remote script?"):
+        console.print("[dim]Aborted.[/dim]")
+        raise typer.Exit(code=0)
 
     with tempfile.NamedTemporaryFile(suffix="_smoke_test.py", mode="w", delete=False) as tmp:
         tmp.write(smoke_src)
@@ -196,7 +239,9 @@ def install(
             smoke_argv += ["--live", "--provider", provider]
 
         console.print(f"  $ {' '.join(smoke_argv[1:])}")
-        result = subprocess.run(smoke_argv, timeout=300)
+        # Security: run smoke test with scrubbed environment
+        _scrubbed_smoke_env = _scrub_env(os.environ)
+        result = subprocess.run(smoke_argv, timeout=300, env=_scrubbed_smoke_env)
         if result.returncode != 0:
             exit_code = max(result.returncode, 1)
             console.print(f"[red]Smoke test failed (exit {result.returncode}).[/red]")
@@ -210,7 +255,8 @@ def install(
         except OSError:
             pass
 
-    console.print(f"\n[green]✅  Hub install complete for {arxiv_id}.[/green]")
+    _done = "OK" if _ascii_mode else "✅"
+    console.print(f"\n[green]{_done}  Hub install complete for {arxiv_id}.[/green]")
     console.print(
         f"[dim]Run `open-researcher hub apply {arxiv_id}` to write these settings into .research/config.yaml[/dim]"
     )
@@ -236,20 +282,62 @@ def apply(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
+    overrides = manifest_to_bootstrap_overrides(manifest)
+    if not overrides:
+        console.print("[yellow]No bootstrap overrides to write (manifest has no install/test commands).[/yellow]")
+        return
+
+    # Security: show commands from the remote manifest and require confirmation
+    console.print(f"\n[bold]Hub manifest {arxiv_id} — commands to be written:[/bold]")
+    for k, v in overrides.items():
+        console.print(f"  [cyan]{k}[/cyan] = {v}")
+    console.print(
+        "\n[yellow]These commands come from a remote registry and will be executed "
+        "during bootstrap. Review them carefully.[/yellow]"
+    )
+    if not typer.confirm("Trust and apply these commands?"):
+        console.print("[dim]Aborted.[/dim]")
+        raise typer.Exit(code=0)
+
     try:
-        written = apply_manifest_to_config_yaml(manifest, research_dir)
+        written = apply_manifest_to_config_yaml(
+            manifest, research_dir, registry_url=registry, user_confirmed=True
+        )
     except (FileNotFoundError, ValueError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
-    if not written:
-        console.print("[yellow]No bootstrap overrides to write (manifest has no install/test commands).[/yellow]")
-        return
-
-    console.print(f"\n[bold]Applied Hub manifest {arxiv_id} → .research/config.yaml[/bold]")
+    _arrow = "->" if _ascii_mode else "\u2192"
+    console.print(f"\n[bold]Applied Hub manifest {arxiv_id} {_arrow} .research/config.yaml[/bold]")
     for k, v in written.items():
         console.print(f"  [cyan]{k}[/cyan] = {v}")
     console.print("\n[dim]Run `open-researcher run` to start the workflow with Hub-verified settings.[/dim]")
+
+
+_SENSITIVE_ENV_PREFIXES = (
+    "API_KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL",
+    "AWS_", "AZURE_", "GCP_", "GOOGLE_", "OPENAI_", "ANTHROPIC_",
+    "HF_TOKEN", "HUGGING_FACE", "WANDB_API_KEY", "COMET_API_KEY",
+    "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN",
+    "PRIVATE_KEY", "SSH_AUTH_SOCK",
+    "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "NETRC",
+    "NPM_CONFIG_", "DOCKER_CONFIG", "KUBECONFIG",
+)
+
+
+def _scrub_env(environ: dict[str, str]) -> dict[str, str]:
+    """Return a copy of *environ* with sensitive variables removed.
+
+    Used when running untrusted commands from the Hub registry so that
+    API keys and cloud credentials are not leaked to arbitrary scripts.
+    """
+    scrubbed: dict[str, str] = {}
+    for key, value in environ.items():
+        upper = key.upper()
+        if any(upper.startswith(prefix) or upper.endswith(prefix) for prefix in _SENSITIVE_ENV_PREFIXES):
+            continue
+        scrubbed[key] = value
+    return scrubbed
 
 
 def _get_folder(arxiv_id: str, registry: str) -> str:

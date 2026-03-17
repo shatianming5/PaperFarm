@@ -135,3 +135,29 @@ async def test_off_removes_handler():
 
     assert len(received) == 0
     await store.close()
+
+
+async def test_shutdown_drains_pending_async_handlers():
+    """Regression: bus.shutdown() must cancel/await pending async tasks."""
+    from open_researcher.kernel.bus import EventBus
+    from open_researcher.kernel.event import Event
+    from open_researcher.kernel.store import EventStore
+
+    store = EventStore(":memory:")
+    await store.open()
+    bus = EventBus(store)
+
+    finished = []
+
+    async def slow_handler(e):
+        await asyncio.sleep(10)  # Would hang if not cancelled
+        finished.append(e)
+
+    bus.on("test", slow_handler)
+    await bus.emit(Event(type="test", payload={}))
+    await asyncio.sleep(0.05)  # Let the task start
+
+    assert len(bus._pending_tasks) == 1
+    await bus.shutdown()
+    assert len(bus._pending_tasks) == 0
+    await store.close()

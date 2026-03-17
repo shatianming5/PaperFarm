@@ -95,15 +95,18 @@ class GPUStatusModal(ModalScreen):
 
     BINDINGS = [("escape", "close", "Close")]
 
-    def __init__(self, gpus: list[dict]):
+    def __init__(self, gpus: list[dict], error_msg: str = ""):
         super().__init__()
         self.gpus = gpus
+        self._error_msg = error_msg
 
     def compose(self) -> ComposeResult:
         with Vertical(id="gpu-dialog"):
             yield Label("GPU Status")
             lines = []
-            if not self.gpus:
+            if self._error_msg:
+                lines.append(f"[#ff7b72]{self._error_msg}[/#ff7b72]")
+            elif not self.gpus:
                 lines.append("No GPUs detected")
             for g in self.gpus:
                 host = g.get("host", "?")
@@ -136,6 +139,40 @@ class GPUStatusModal(ModalScreen):
         self.dismiss()
 
 
+class HelpModal(ModalScreen):
+    """Keyboard shortcut reference modal — dismiss with Escape or Close button."""
+
+    BINDINGS = [("escape", "close", "Close")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="help-dialog"):
+            yield Label("Keyboard Shortcuts")
+            yield Static(
+                "[bold]Navigation[/bold]\n"
+                "  [cyan]1[/cyan]-[cyan]4[/cyan]  Switch tabs (Command, Execution, Logs, Docs)\n"
+                "  [cyan]n[/cyan]/[cyan]b[/cyan]  Next/previous doc (Docs tab)\n"
+                "  Up/Down  Browse lists\n\n"
+                "[bold]Control[/bold]\n"
+                "  [cyan]p[/cyan]    Pause experiment loop\n"
+                "  [cyan]r[/cyan]    Resume experiment loop\n"
+                "  [cyan]s[/cyan]    Skip current experiment\n"
+                "  [cyan]u[/cyan]    Undo skip\n\n"
+                "[bold]Views[/bold]\n"
+                "  [cyan]g[/cyan]    GPU status\n"
+                "  [cyan]l[/cyan]    Full log viewer (filterable)\n"
+                "  [cyan]?[/cyan]    This help screen\n"
+                "  [cyan]q[/cyan]    Quit\n\n"
+                "[dim]Press Esc to close[/dim]"
+            )
+            yield Button("Close", id="btn-close")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss()
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class LogScreen(Screen):
     """Full-screen log viewer with search."""
 
@@ -151,7 +188,11 @@ class LogScreen(Screen):
         from pathlib import Path
 
         p = Path(self.log_path)
-        if p.exists():
+        if not p.exists():
+            self._all_lines = [f"(Log file not found: {self.log_path})"]
+        elif p.stat().st_size == 0:
+            self._all_lines = ["(Log file is empty — experiment may not have started yet)"]
+        else:
             try:
                 CHUNK = 64 * 1024
                 with open(p, encoding="utf-8", errors="replace") as f:
@@ -159,8 +200,8 @@ class LogScreen(Screen):
                     pos = max(f.tell() - CHUNK, 0)
                     f.seek(pos)
                     self._all_lines = f.read().splitlines()[-200:]
-            except OSError:
-                self._all_lines = ["(Error reading log file)"]
+            except OSError as exc:
+                self._all_lines = [f"(Error reading log file: {self.log_path} — {exc})"]
         yield Input(placeholder="Filter logs...", id="log-filter")
         yield TextArea("\n".join(self._all_lines), read_only=True, id="log-content")
         footer = (

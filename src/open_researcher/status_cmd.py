@@ -3,6 +3,7 @@
 import csv
 import json
 import math
+import os
 import subprocess
 from pathlib import Path
 
@@ -292,16 +293,19 @@ PHASE_NAMES = {
 }
 
 SPARK_CHARS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+SPARK_ASCII = " ._-=+#@"
 
 
 def _sparkline(values: list[float]) -> str:
-    """Generate a Unicode sparkline from a list of values."""
+    """Generate a sparkline from a list of values (ASCII-safe when NO_COLOR)."""
     if not values:
         return ""
+    _ascii = bool(os.environ.get("NO_COLOR", "").strip() or os.environ.get("TERM", "") == "dumb")
+    chars = SPARK_ASCII if _ascii else SPARK_CHARS
     lo, hi = min(values), max(values)
     if lo == hi:
-        return SPARK_CHARS[4] * len(values)
-    return "".join(SPARK_CHARS[min(int((v - lo) / (hi - lo) * 7), 7)] for v in values)
+        return chars[4] * len(values)
+    return "".join(chars[min(int((v - lo) / (hi - lo) * 7), 7)] for v in values)
 
 
 def _format_token_usage(research: Path) -> list[str]:
@@ -326,8 +330,9 @@ def _format_token_usage(research: Path) -> list[str]:
 def print_status(repo_path: Path, sparkline: bool = False) -> None:
     """Print formatted research status to terminal."""
     research = repo_path / ".research"
+    console = Console(stderr=True)
     if not research.exists():
-        print("[ERROR] No .research/ directory found. Run 'open-researcher init' first.")
+        console.print("[red]No .research/ directory found. Run 'open-researcher run' first.[/red]")
         raise SystemExit(1)
 
     state = parse_research_state(repo_path)
@@ -409,11 +414,13 @@ def print_status(repo_path: Path, sparkline: bool = False) -> None:
 
     if state["total"] > 0:
         lines.append("  Experiments:")
+        _ascii_mode = bool(os.environ.get("NO_COLOR", "").strip() or os.environ.get("TERM", "") == "dumb")
+        _ik, _id, _ic = ("OK", "X", "!!") if _ascii_mode else ("✓", "✗", "💥")
         lines.append(
             f"    Total: {state['total']}  "
-            f"✓ keep: {state['keep']}  "
-            f"✗ discard: {state['discard']}  "
-            f"💥 crash: {state['crash']}"
+            f"{_ik} keep: {state['keep']}  "
+            f"{_id} discard: {state['discard']}  "
+            f"{_ic} crash: {state['crash']}"
         )
         lines.append("")
 
@@ -426,7 +433,8 @@ def print_status(repo_path: Path, sparkline: bool = False) -> None:
             lines.append("")
 
         lines.append(f"  Recent {len(state['recent'])} experiments:")
-        status_icons = {"keep": "✓", "discard": "✗", "crash": "💥"}
+        _ascii = bool(os.environ.get("NO_COLOR", "").strip() or os.environ.get("TERM", "") == "dumb")
+        status_icons = {"keep": "OK" if _ascii else "✓", "discard": "X" if _ascii else "✗", "crash": "!!" if _ascii else "💥"}
         for r in reversed(state["recent"]):
             icon = status_icons.get(r.get("status", ""), "?")
             val = _safe_float(r.get("metric_value", ""))

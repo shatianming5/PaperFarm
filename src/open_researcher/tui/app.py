@@ -17,7 +17,7 @@ from open_researcher.activity import ActivityMonitor
 from open_researcher.control_plane import issue_control_command, read_control
 from open_researcher.idea_pool import IdeaBacklog
 from open_researcher.status_cmd import parse_research_state
-from open_researcher.tui.modals import GPUStatusModal, LogScreen
+from open_researcher.tui.modals import GPUStatusModal, HelpModal, LogScreen
 from open_researcher.tui.view_model import DashboardState, RoleStatus, build_dashboard_state, build_docs_workbench
 from open_researcher.tui.widgets import (
     BootstrapStatusPanel,
@@ -54,11 +54,12 @@ class ResearchApp(App):
         ("p", "pause", "Pause"),
         ("r", "resume", "Resume"),
         ("s", "skip", "Skip frontier"),
-        ("S", "clear_skip", "Cancel skip"),
+        ("u", "clear_skip", "Undo skip"),
         ("g", "gpu_status", "GPU status"),
         ("l", "view_log", "View log"),
         ("n", "next_doc", "Next doc"),
         ("b", "prev_doc", "Prev doc"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit_app", "Quit"),
     ]
 
@@ -474,6 +475,7 @@ class ResearchApp(App):
             self.query_one("#metric-chart", MetricChart).update_data(
                 rows,
                 dashboard.execution.primary_metric,
+                direction=dashboard.execution.direction,
             )
         except NoMatches:
             logger.debug("Error updating metric chart", exc_info=True)
@@ -538,15 +540,21 @@ class ResearchApp(App):
         if self._dashboard_cache and self._dashboard_cache.session.paused:
             self.notify("Already paused", severity="warning")
             return
-        self._write_control_command("pause", reason="paused from TUI hotkey")
-        self.notify("Paused", severity="information")
+        if self._write_control_command("pause", reason="paused from TUI hotkey"):
+            self.notify("Paused", severity="information")
+            self._refresh_data()
+        else:
+            self.notify("Pause failed — check if another session holds the lock. Try again or restart.", severity="error")
 
     def action_resume(self) -> None:
         if self._dashboard_cache and not self._dashboard_cache.session.paused:
             self.notify("Already running", severity="warning")
             return
-        self._write_control_command("resume")
-        self.notify("Resumed", severity="information")
+        if self._write_control_command("resume"):
+            self.notify("Resumed", severity="information")
+            self._refresh_data()
+        else:
+            self.notify("Resume failed — check if another session holds the lock. Try again or restart.", severity="error")
 
     def action_skip(self) -> None:
         if self.app_phase != "experimenting":
@@ -555,27 +563,38 @@ class ResearchApp(App):
         if self._dashboard_cache and self._dashboard_cache.session.skip_current:
             self.notify("Skip already queued", severity="warning")
             return
-        self._write_control_command("skip_current")
-        self.notify("Skip queued", severity="information")
+        if self._write_control_command("skip_current"):
+            self.notify("Skip queued", severity="information")
+            self._refresh_data()
+        else:
+            self.notify("Skip failed — check if another session holds the lock. Try again or restart.", severity="error")
 
     def action_clear_skip(self) -> None:
         if self.app_phase != "experimenting":
             self.notify("Skip only available during experimenting", severity="warning")
             return
-        self._write_control_command("clear_skip")
-        self.notify("Skip cancelled", severity="information")
+        if self._write_control_command("clear_skip"):
+            self.notify("Skip cancelled", severity="information")
+            self._refresh_data()
+        else:
+            self.notify("Cancel skip failed — check if another session holds the lock. Try again or restart.", severity="error")
 
     def action_gpu_status(self) -> None:
         gpu_path = self.research_dir / "gpu_status.json"
         gpus = []
-        if gpu_path.exists():
+        error_msg = ""
+        if not gpu_path.exists():
+            error_msg = f"GPU status file not found ({gpu_path}) — will be created on next experiment run"
+        else:
             try:
                 data = json.loads(gpu_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     gpus = data.get("gpus", [])
-            except (json.JSONDecodeError, OSError, TypeError):
-                pass
-        self.push_screen(GPUStatusModal(gpus))
+            except json.JSONDecodeError:
+                error_msg = f"GPU status file corrupted: {gpu_path}\nWill regenerate on next experiment run."
+            except OSError as exc:
+                error_msg = f"Cannot read {gpu_path}: {exc}"
+        self.push_screen(GPUStatusModal(gpus, error_msg=error_msg))
 
     def action_view_log(self) -> None:
         log_path = str(self.research_dir / "run.log")
@@ -608,6 +627,10 @@ class ResearchApp(App):
             self.query_one("#docs-sidebar", DocsSidebarPanel).sync_selection(target)
         except (NoMatches, Exception):
             pass
+
+    def action_show_help(self) -> None:
+        """Show a dismissible keybinding reference modal."""
+        self.push_screen(HelpModal())
 
     def action_quit_app(self) -> None:
         self.exit()

@@ -60,6 +60,10 @@ class Registry:
             plugin = self._plugins.get(name)
             if plugin:
                 for dep in plugin.dependencies:
+                    if dep not in self._plugins:
+                        raise ValueError(
+                            f"Plugin {name!r} depends on {dep!r}, which is not registered"
+                        )
                     _visit(dep)
             visiting.discard(name)
             visited.add(name)

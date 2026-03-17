@@ -39,6 +39,7 @@ class Kernel:
             raise
 
     async def shutdown(self) -> None:
+        await self.bus.shutdown()
         for p in reversed(self._registry.boot_order()):
             try:
                 await p.stop()

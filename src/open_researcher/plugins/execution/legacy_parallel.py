@@ -107,7 +107,10 @@ def build_parallel_worker_plugins(
         failure_memory=FailureMemoryPlugin(FailureMemoryLedger(research_dir / "failure_memory_ledger.json"))
         if profile.failure_memory
         else None,
-        workspace_isolation=WorktreeIsolationPlugin(repo_path) if profile.worktree_isolation else None,
+        workspace_isolation=WorktreeIsolationPlugin(
+            repo_path,
+            extra_symlink_dirs=cfg.worktree_symlink_dirs,
+        ) if profile.worktree_isolation else None,
     )
     return profile, plugins
 
@@ -138,7 +141,8 @@ def estimate_parallel_frontier_target(research_dir: Path, cfg: ResearchConfig) -
         single_gpu_qualification_timeout_minutes=cfg.scheduler_single_gpu_qualification_timeout_minutes,
     )
     slot_budget = requested if requested_raw > 0 else max(manager.estimate_packable_slots(
-        default_memory_mb=cfg.gpu_default_memory_per_worker_mb
+        default_memory_mb=cfg.gpu_default_memory_per_worker_mb,
+        max_per_gpu=cfg.gpu_max_workers_per_gpu,
     ), 1)
     slots = allocator.worker_slots(slot_budget)
     return max(len(slots), 1)

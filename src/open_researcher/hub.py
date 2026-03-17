@@ -13,6 +13,15 @@ from typing import Any
 HUB_REGISTRY_URL = "https://raw.githubusercontent.com/XuanmiaoG/PaperFarm-Hub/main"
 
 
+def _validate_registry_url(url: str) -> None:
+    """Reject non-HTTPS registry URLs to prevent MITM attacks."""
+    if not url.startswith("https://"):
+        raise ValueError(
+            f"Refusing non-HTTPS registry URL: {url!r}. "
+            "Hub communication requires HTTPS to prevent tampering."
+        )
+
+
 def _fetch_json(url: str, timeout: int = 10) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
@@ -37,6 +46,7 @@ def _fetch_json(url: str, timeout: int = 10) -> dict[str, Any]:
 
 def fetch_index(registry_url: str = HUB_REGISTRY_URL) -> dict[str, str]:
     """Return mapping of arxiv_id -> folder name from the Hub index (supports v1 and v2)."""
+    _validate_registry_url(registry_url)
     index = _fetch_json(f"{registry_url}/index.json")
     entries = index.get("entries", {})
     # v2: entries is a list of dicts with arxiv_id + folder fields
@@ -58,6 +68,7 @@ def fetch_index(registry_url: str = HUB_REGISTRY_URL) -> dict[str, str]:
 
 def fetch_index_full(registry_url: str = HUB_REGISTRY_URL) -> list[dict[str, Any]]:
     """Return the full index entry list (v2 only) for catalog/listing use cases."""
+    _validate_registry_url(registry_url)
     index = _fetch_json(f"{registry_url}/index.json")
     entries = index.get("entries", [])
     if isinstance(entries, list):
@@ -153,6 +164,9 @@ def manifest_summary(manifest: dict[str, Any]) -> str:
 def apply_manifest_to_config_yaml(
     manifest: dict[str, Any],
     research_dir: Path,
+    *,
+    registry_url: str = "",
+    user_confirmed: bool = False,
 ) -> dict[str, Any]:
     """
     Merge manifest bootstrap overrides into .research/config.yaml.
@@ -180,12 +194,19 @@ def apply_manifest_to_config_yaml(
     for key, value in overrides.items():
         bootstrap[key] = value
 
-    # Record the Hub manifest source for audit trail
+    # Record the Hub manifest source for audit trail using the actual registry URL.
+    effective_registry = registry_url or HUB_REGISTRY_URL
     bootstrap["hub_arxiv_id"] = manifest.get("paper", {}).get("arxiv_id", "")
     bootstrap["hub_manifest_source"] = (
-        f"{HUB_REGISTRY_URL}/hub/"
+        f"{effective_registry}/hub/"
         f"{manifest.get('_folder', '')}/paperfarm.json"
     )
+    bootstrap["hub_commands_reviewed"] = user_confirmed
+    # Security: store a digest of the reviewed commands so bootstrap can verify
+    # they haven't been tampered with since user review
+    import hashlib
+    command_text = "|".join(f"{k}={v}" for k, v in sorted(overrides.items()))
+    bootstrap["hub_commands_digest"] = hashlib.sha256(command_text.encode()).hexdigest()
 
     import os
     import tempfile

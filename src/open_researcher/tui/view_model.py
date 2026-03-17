@@ -227,6 +227,7 @@ class ExecutionSummary:
     keep: int
     discard: int
     crash: int
+    direction: str = ""
     recent_results: list[dict] = field(default_factory=list)
 
 
@@ -846,6 +847,7 @@ def build_dashboard_state(
         keep=session.keep,
         discard=session.discard,
         crash=session.crash,
+        direction=session.direction,
         recent_results=rows[-8:],
     )
 

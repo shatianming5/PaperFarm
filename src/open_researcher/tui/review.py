@@ -6,7 +6,7 @@ import yaml
 from textual.app import ComposeResult
 from textual.containers import ScrollableContainer, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Label, Static, TextArea
+from textual.widgets import Button, Label, Markdown, Static, TextArea
 
 
 def load_review_data(research_dir: Path) -> dict:
@@ -48,8 +48,9 @@ class ReviewScreen(Screen[str | None]):
 
     BINDINGS = [
         ("enter", "confirm", "Confirm & Start"),
+        ("escape", "cancel", "Quit"),
         ("e", "edit_strategy", "Edit Strategy"),
-        ("m", "edit_metrics", "Edit Metrics"),
+        ("m", "edit_evaluation", "Edit Evaluation"),
         ("r", "reanalyze", "Re-analyze"),
         ("q", "cancel", "Quit"),
     ]
@@ -65,23 +66,23 @@ class ReviewScreen(Screen[str | None]):
             yield Label("Analysis Complete — Review Research Plan", id="review-title")
 
             yield Label("Project Understanding", id="section-understanding")
-            yield Static(
-                self._data["understanding"][:500] or "(No analysis yet)",
+            yield Markdown(
+                self._data["understanding"] or "*No analysis yet*",
                 id="understanding-content",
             )
 
             yield Label("Research Strategy  [e] edit", id="section-strategy")
-            yield Static(
-                self._data["strategy"] or "(No strategy defined)",
+            yield Markdown(
+                self._data["strategy"] or "*No strategy defined*",
                 id="strategy-content",
             )
 
-            yield Label("Evaluation Plan  [m] edit", id="section-evaluation")
+            yield Label("Evaluation Plan  [m] edit evaluation", id="section-evaluation")
             metric_info = ""
             if self._data["metric_name"]:
-                metric_info = f"Metric: {self._data['metric_name']} ({self._data['metric_direction']})\n\n"
-            yield Static(
-                metric_info + (self._data["evaluation"] or "(No evaluation defined)"),
+                metric_info = f"**Metric:** {self._data['metric_name']} ({self._data['metric_direction']})\n\n"
+            yield Markdown(
+                metric_info + (self._data["evaluation"] or "*No evaluation defined*"),
                 id="evaluation-content",
             )
 
@@ -93,9 +94,9 @@ class ReviewScreen(Screen[str | None]):
         yield Static(
             "[bold #7dcfff]\\[Enter][/bold #7dcfff] [dim]Confirm[/dim]  "
             "[bold #7dcfff]\\[e][/bold #7dcfff] [dim]Edit Strategy[/dim]  "
-            "[bold #7dcfff]\\[m][/bold #7dcfff] [dim]Edit Metrics[/dim]  "
+            "[bold #7dcfff]\\[m][/bold #7dcfff] [dim]Edit Evaluation[/dim]  "
             "[bold #7dcfff]\\[r][/bold #7dcfff] [dim]Re-analyze[/dim]  "
-            "[bold #7dcfff]\\[q][/bold #7dcfff] [dim]Quit[/dim]",
+            "[bold #7dcfff]\\[Esc/q][/bold #7dcfff] [dim]Quit[/dim]",
             id="review-footer",
         )
 
@@ -132,14 +133,14 @@ class ReviewScreen(Screen[str | None]):
                 (self.research_dir / "research-strategy.md").write_text(new_content)
                 self._data["strategy"] = new_content
                 try:
-                    self.query_one("#strategy-content", Static).update(new_content)
+                    self.query_one("#strategy-content", Markdown).update(new_content)
                 except Exception:
                     pass
                 self._mark_edited("strategy", "section-strategy", "Research Strategy  [e] edit")
 
         self.app.push_screen(EditDocScreen(content, "Research Strategy"), _on_save)
 
-    def action_edit_metrics(self) -> None:
+    def action_edit_evaluation(self) -> None:
         """Open evaluation file in an editable TextArea overlay."""
         content = self._data["evaluation"]
 
@@ -148,10 +149,10 @@ class ReviewScreen(Screen[str | None]):
                 (self.research_dir / "evaluation.md").write_text(new_content)
                 self._data["evaluation"] = new_content
                 try:
-                    self.query_one("#evaluation-content", Static).update(new_content)
+                    self.query_one("#evaluation-content", Markdown).update(new_content)
                 except Exception:
                     pass
-                self._mark_edited("evaluation", "section-evaluation", "Evaluation Plan  [m] edit")
+                self._mark_edited("evaluation", "section-evaluation", "Evaluation Plan  [m] edit evaluation")
 
         self.app.push_screen(EditDocScreen(content, "Evaluation Plan"), _on_save)
 

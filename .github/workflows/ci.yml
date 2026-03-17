@@ -180,13 +180,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: uv pip install --system -e ".[dev]"
+      - name: Install dependencies from frozen lockfile
+        run: |
+          uv sync --frozen
+          uv pip install --system pip-audit
 
       - name: Audit dependencies for known vulnerabilities
         run: |
-          uv pip install --system pip-audit
-          pip-audit
+          uv export --frozen --no-hashes -o /tmp/requirements-audit.txt
+          pip-audit -r /tmp/requirements-audit.txt
 
   # ── Package smoke test ────────────────────────────────────────────
   package-smoke:

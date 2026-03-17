@@ -6,7 +6,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from open_researcher.failure_memory import (
     MEMORY_POLICY,
@@ -547,12 +547,17 @@ class WorkspaceLease:
 class WorktreeIsolationPlugin:
     """Optional isolated-worktree capability for worker execution."""
 
-    def __init__(self, repo_path: Path):
+    def __init__(self, repo_path: Path, *, extra_symlink_dirs: Iterable[str] = ()):
         self.repo_path = repo_path
+        self._extra_symlink_dirs = list(extra_symlink_dirs)
 
     def acquire(self, worker_id: str, idea_id: str) -> WorkspaceLease:
         try:
-            wt_path = create_worktree(self.repo_path, f"{worker_id}-{idea_id}")
+            wt_path = create_worktree(
+                self.repo_path,
+                f"{worker_id}-{idea_id}",
+                extra_symlink_dirs=self._extra_symlink_dirs,
+            )
         except Exception as exc:
             raise WorkspaceIsolationError(f"[{worker_id}] Worktree creation failed: {exc}") from exc
 

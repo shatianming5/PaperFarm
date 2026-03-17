@@ -84,3 +84,19 @@ async def test_circular_dependency_raises():
     reg.register(Y())
     with pytest.raises(ValueError, match="[Cc]ircular"):
         reg.boot_order()
+
+
+async def test_missing_dependency_raises():
+    """Regression: boot_order must fail fast on unregistered dependencies."""
+    from open_researcher.kernel.plugin import PluginBase, Registry
+
+    class NeedsMissing(PluginBase):
+        name = "needs_missing"
+        dependencies = ["does_not_exist"]
+        async def start(self, kernel): pass
+        async def stop(self): pass
+
+    reg = Registry()
+    reg.register(NeedsMissing())
+    with pytest.raises(ValueError, match="not registered"):
+        reg.boot_order()

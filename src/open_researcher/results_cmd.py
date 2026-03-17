@@ -217,12 +217,12 @@ def write_final_results_tsv(repo_path: Path) -> None:
 def print_results(repo_path: Path) -> None:
     research = repo_path / ".research"
     if not research.exists():
-        print("[ERROR] No .research/ directory found.", file=sys.stderr)
+        Console(stderr=True).print("[red]No .research/ directory found. Run 'open-researcher run' first.[/red]")
         raise SystemExit(1)
 
     rows = load_results(repo_path)
     if not rows:
-        print("No experiment results yet.")
+        Console().print("[dim]No experiment results yet.[/dim]")
         return
 
     console = Console()
@@ -261,11 +261,11 @@ def print_results_chart(repo_path: Path, metric: str | None = None, last: int | 
 
     rows = load_results(repo_path)
     if not rows:
-        print("No results to chart.")
+        Console().print("[dim]No results to chart.[/dim]")
         return
     if last is not None:
         if last <= 0:
-            print("[ERROR] --last must be a positive integer.", file=sys.stderr)
+            Console(stderr=True).print("[red]--last must be a positive integer.[/red]")
             raise SystemExit(1)
         rows = rows[-last:]
 
@@ -294,7 +294,7 @@ def print_results_chart(repo_path: Path, metric: str | None = None, last: int | 
         statuses.append(r.get("status", ""))
 
     if not values:
-        print("No valid numeric results to chart.")
+        Console().print("[dim]No valid numeric results to chart.[/dim]")
         return
 
     plt.clear_figure()

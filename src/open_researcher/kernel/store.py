@@ -1,11 +1,13 @@
 """SQLite-backed event store for the microkernel."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
 import threading
 from pathlib import Path
+
 from open_researcher.kernel.event import Event
 
 logger = logging.getLogger(__name__)
@@ -47,7 +49,7 @@ class EventStore:
             self._conn.close()
             self._conn = None
 
-    async def append(self, event: Event) -> None:
+    def _sync_append(self, event: Event) -> None:
         conn = self._require_conn()
         with self._lock:
             conn.execute(
@@ -63,7 +65,10 @@ class EventStore:
             )
             conn.commit()
 
-    async def replay(
+    async def append(self, event: Event) -> None:
+        await asyncio.to_thread(self._sync_append, event)
+
+    def _sync_replay(
         self,
         *,
         type_prefix: str = "",
@@ -101,8 +106,21 @@ class EventStore:
             ))
         return events
 
-    async def count(self) -> int:
+    async def replay(
+        self,
+        *,
+        type_prefix: str = "",
+        since: float = 0.0,
+    ) -> list[Event]:
+        return await asyncio.to_thread(
+            self._sync_replay, type_prefix=type_prefix, since=since
+        )
+
+    def _sync_count(self) -> int:
         conn = self._require_conn()
         with self._lock:
             row = conn.execute("SELECT COUNT(*) FROM events").fetchone()
         return row[0] if row else 0
+
+    async def count(self) -> int:
+        return await asyncio.to_thread(self._sync_count)

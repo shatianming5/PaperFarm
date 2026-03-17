@@ -22,7 +22,7 @@
 
 ## 🌾 Key Features
 
-- **🚀 One `run` Command**: `PaperFarm run` bootstraps a new workflow when `.research/` is missing, or resumes an existing workflow when it already exists.
+- **🚀 One `run` Command**: `paperfarm run` bootstraps a new workflow when `.research/` is missing, or resumes an existing workflow when it already exists.
 
 - **🤖 Multi-Agent Support**: Works with Claude Code, Codex CLI, Aider, OpenCode, Kimi CLI, and Gemini CLI — auto-detects the first installed agent, or pick your own.
 
@@ -48,12 +48,12 @@
 pip install PaperFarm
 
 cd your-project
-PaperFarm run
+paperfarm run
 ```
 
 This launches a **4-phase flow**:
 
-Plant the first seed with `PaperFarm run`, then let the field work:
+Plant the first seed with `paperfarm run`, then let the field work:
 
 1. **Scout** — survey the field: analyze your codebase, search related work, and design evaluation metrics
 2. **Prepare** — prepare the soil: resolve a local Python env, install command, data/setup step, and a readiness smoke check
@@ -63,8 +63,8 @@ Plant the first seed with `PaperFarm run`, then let the field work:
 If you want to inspect exactly what `run` will use before it touches the repo, use:
 
 ```bash
-PaperFarm run --dry-run
-PaperFarm doctor
+paperfarm run --dry-run
+paperfarm doctor
 ```
 
 ### Headless Mode
@@ -72,7 +72,7 @@ PaperFarm doctor
 Run without TUI — perfect for scripts, CI, or monitoring with external tools:
 
 ```bash
-PaperFarm run --mode headless --goal "reduce val_loss below 0.3" --max-experiments 20
+paperfarm run --mode headless --goal "reduce val_loss below 0.3" --max-experiments 20
 ```
 
 Outputs structured **JSON Lines** to stdout, one event per line:
@@ -92,18 +92,18 @@ Also writes to `.research/events.jsonl` for persistent logging. Interactive mode
 pip install PaperFarm
 
 cd your-project
-PaperFarm init                      # Initialize .research/ directory
-PaperFarm run --agent claude-code   # Launch with TUI dashboard
+paperfarm init                      # Initialize .research/ directory
+paperfarm run --agent claude-code   # Launch with TUI dashboard
 # Go to sleep. Check results in the morning:
-PaperFarm status --sparkline
-PaperFarm results --chart primary
+paperfarm status --sparkline
+paperfarm results --chart primary
 ```
 
 > Try the interactive demo — no agent or API key needed:
 > ```bash
-> PaperFarm demo              # run in terminal
-> PaperFarm demo --serve      # open in browser at http://localhost:8000
-> PaperFarm demo --serve --port 9000
+> paperfarm demo              # run in terminal
+> paperfarm demo --serve      # open in browser at http://localhost:8000
+> paperfarm demo --serve --port 9000
 > ```
 
 ---
@@ -181,7 +181,7 @@ Each experiment is a git commit. Successful experiments stay; failed ones are ro
 <summary><b>🧰 Auto-Prepare Resolution Rules</b></summary>
 <br/>
 
-`PaperFarm run` now tries to make a local Python repo runnable before the research loop starts.
+`paperfarm run` now tries to make a local Python repo runnable before the research loop starts.
 
 - **Python env priority**: explicit `bootstrap.python` → active virtualenv → repo `.venv` → auto-create `.venv`
 - **Install priority**: explicit `bootstrap.install_command` → `uv sync` → `poetry install` → `python -m pip install -r requirements.txt` → `python -m pip install -e .`
@@ -346,15 +346,15 @@ Open Researcher supports **Linux**, **macOS**, and **Windows**. Python 3.10+ req
 pip install PaperFarm
 
 # Try the demo first (no agent or API key needed)
-PaperFarm demo                   # run in terminal
-PaperFarm demo --serve           # open in browser at http://localhost:8000
+paperfarm demo                   # run in terminal
+paperfarm demo --serve           # open in browser at http://localhost:8000
 
 # Install browser support (optional)
 pip install "PaperFarm[serve]"
 
 # Then use it for real
 cd your-project
-PaperFarm run
+paperfarm run
 ```
 
 ### Option B: From source (for development)
@@ -380,7 +380,7 @@ make ci     # full local CI: lint + test + coverage + package smoke
 
 ## 🖥️ CLI Reference
 
-> All commands: `PaperFarm <command>`
+> All commands: `paperfarm <command>`
 
 <details>
 <summary>⚡ <b>Core Commands</b></summary>

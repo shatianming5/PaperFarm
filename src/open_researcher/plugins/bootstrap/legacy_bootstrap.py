@@ -6,6 +6,7 @@ Migrated from ``open_researcher.bootstrap``.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -13,8 +14,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-
-import logging
 
 from open_researcher.config import ResearchConfig
 from open_researcher.event_journal import now_iso
@@ -101,6 +100,22 @@ def read_bootstrap_state(path: Path) -> dict:
     return merged
 
 
+def _redact_state_secrets(payload: dict) -> dict:
+    """Redact secret-bearing strings in the bootstrap state before persistence.
+
+    Works on a deep copy so the in-memory state used for execution is unaffected.
+    """
+    import copy
+    sanitized = copy.deepcopy(payload)
+    for step_key in ("install", "data", "smoke"):
+        step = sanitized.get(step_key, {})
+        if isinstance(step.get("command"), str) and step["command"]:
+            step["command"] = _redact_secrets(step["command"])
+        if isinstance(step.get("detail"), str) and step["detail"]:
+            step["detail"] = _redact_secrets(step["detail"])
+    return sanitized
+
+
 def write_bootstrap_state(path: Path, state: dict) -> None:
     payload = default_bootstrap_state(path.parent)
     payload.update({k: v for k, v in state.items() if k in payload})
@@ -108,6 +123,8 @@ def write_bootstrap_state(path: Path, state: dict) -> None:
         if isinstance(state.get(key), dict):
             payload[key].update(state[key])
     payload["updated_at"] = now_iso()
+    # Security: redact secrets before writing to disk
+    payload = _redact_state_secrets(payload)
     import tempfile
     content = json.dumps(payload, indent=2)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
@@ -269,11 +286,18 @@ def _detect_smoke_command(repo_path: Path, research_dir: Path, workdir: Path, cf
 
 def _expected_paths_status(repo_path: Path, expected_paths: list[str]) -> list[dict]:
     items: list[dict] = []
+    repo_root = repo_path.resolve()
     for raw in expected_paths:
         value = str(raw).strip()
         if not value:
             continue
         path = (repo_path / value).resolve()
+        # Security: only probe paths within the repo root
+        try:
+            path.relative_to(repo_root)
+        except ValueError:
+            logger.warning("Skipping expected_path outside repo root: %s", value)
+            continue
         items.append({"path": value, "exists": path.exists()})
     return items
 
@@ -335,8 +359,46 @@ def resolve_bootstrap_plan(repo_path: Path, research_dir: Path, cfg: ResearchCon
     errors: list[str] = []
     warnings: list[str] = []
     unresolved: list[str] = []
+    # Security: reject working_dir that escapes the repo root
+    repo_root = repo_path.resolve()
+    try:
+        working_dir.relative_to(repo_root)
+    except ValueError:
+        errors.append(
+            f"Working directory escapes the repo root: {working_dir_value} "
+            f"(resolves to {working_dir}, repo root is {repo_root})"
+        )
     if not working_dir.exists():
         errors.append(f"Working directory does not exist: {working_dir_value}")
+    # Security: verify Hub command digest if commands came from Hub
+    if cfg.hub_arxiv_id:
+        if not cfg.hub_commands_reviewed or not cfg.hub_commands_digest:
+            # Fail closed: Hub-origin commands without review metadata require re-review
+            errors.append(
+                f"Hub commands for {cfg.hub_arxiv_id} lack review metadata. "
+                "Re-run `hub apply` to review and approve the commands."
+            )
+        else:
+            import hashlib
+            # Reconstruct the same canonical override set as hub.py's apply function
+            hub_overrides: dict[str, str] = {}
+            if cfg.bootstrap_install_command:
+                hub_overrides["install_command"] = cfg.bootstrap_install_command
+            if cfg.bootstrap_smoke_command:
+                hub_overrides["smoke_command"] = cfg.bootstrap_smoke_command
+            if cfg.bootstrap_python:
+                hub_overrides["python"] = cfg.bootstrap_python
+            if cfg.bootstrap_requires_gpu:
+                hub_overrides["requires_gpu"] = str(True)
+            if hub_overrides:
+                command_text = "|".join(f"{k}={v}" for k, v in sorted(hub_overrides.items()))
+                actual_digest = hashlib.sha256(command_text.encode()).hexdigest()
+                if actual_digest != cfg.hub_commands_digest:
+                    errors.append(
+                        "Hub command digest mismatch: bootstrap commands have been modified since "
+                        f"user review (hub_arxiv_id={cfg.hub_arxiv_id}). "
+                        "Re-run `hub apply` to re-review the commands."
+                    )
     if repo_profile["kind"] != "python" and not (
         cfg.bootstrap_install_command or cfg.bootstrap_data_command or cfg.bootstrap_smoke_command
     ):
@@ -478,6 +540,29 @@ def _prepend_path(path_value: str, entries: list[Path]) -> str:
     return os.pathsep.join(parts)
 
 
+_SENSITIVE_ENV_PREFIXES = (
+    "API_KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL",
+    "AWS_", "AZURE_", "GCP_", "GOOGLE_", "OPENAI_", "ANTHROPIC_",
+    "HF_TOKEN", "HUGGING_FACE", "WANDB_API_KEY", "COMET_API_KEY",
+    "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN",
+    "PRIVATE_KEY", "SSH_AUTH_SOCK",
+    "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "NETRC",
+    "NPM_CONFIG_", "DOCKER_CONFIG", "KUBECONFIG",
+)
+
+
+def _scrub_sensitive_env(env: dict[str, str]) -> dict[str, str]:
+    """Remove sensitive variables (API keys, cloud credentials) from the env dict.
+
+    Bootstrap commands are derived from config or auto-detected from repo files,
+    so they should not have access to ambient secrets.
+    """
+    return {
+        k: v for k, v in env.items()
+        if not any(k.upper().startswith(p) or k.upper().endswith(p) for p in _SENSITIVE_ENV_PREFIXES)
+    }
+
+
 def command_env_for_python(python_executable: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
     env = dict(base_env) if base_env is not None else dict(os.environ)
     path_entries: list[Path] = []
@@ -500,11 +585,11 @@ def command_env_for_python(python_executable: str, *, base_env: dict[str, str] |
 
 
 def _command_env(python_executable: str) -> dict[str, str]:
-    return command_env_for_python(python_executable)
+    return _scrub_sensitive_env(command_env_for_python(python_executable))
 
 
 def _ambient_command_env(python_executable: str) -> dict[str, str]:
-    env = dict(os.environ)
+    env = _scrub_sensitive_env(dict(os.environ))
     venv_root = _venv_root_from_python(python_executable)
     if venv_root is None:
         return env
@@ -534,6 +619,28 @@ def _ambient_command_env(python_executable: str) -> dict[str, str]:
     return env
 
 
+_SECRET_PATTERNS = [
+    # key=value and key: value forms
+    re.compile(
+        r"(?i)"
+        r"(?:api[_-]?key|secret|token|password|credential|private[_-]?key)"
+        r"\s*[:=]\s*\S+"
+    ),
+    # Bearer/Basic auth headers
+    re.compile(r"(?i)(?:Bearer|Basic)\s+[A-Za-z0-9+/=_-]{8,}"),
+    # URL-embedded credentials (user:pass@host)
+    re.compile(r"://[^@\s]+:[^@\s]+@"),
+]
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact text that looks like it contains secrets."""
+    result = text
+    for pattern in _SECRET_PATTERNS:
+        result = pattern.sub("[REDACTED]", result)
+    return result
+
+
 def _append_prepare_log(
     log_path: Path,
     step: str,
@@ -546,15 +653,15 @@ def _append_prepare_log(
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"\n== {now_iso()} :: {step} ==\n")
-            handle.write(f"$ {command}\n")
+            handle.write(f"$ {_redact_secrets(command)}\n")
             if env_mode:
                 handle.write(f"[env_mode={env_mode}]\n")
             if result.stdout:
-                handle.write(result.stdout)
+                handle.write(_redact_secrets(result.stdout))
                 if not result.stdout.endswith("\n"):
                     handle.write("\n")
             if result.stderr:
-                handle.write(result.stderr)
+                handle.write(_redact_secrets(result.stderr))
                 if not result.stderr.endswith("\n"):
                     handle.write("\n")
             handle.write(f"[exit_code={result.returncode}]\n")
@@ -563,6 +670,14 @@ def _append_prepare_log(
 
 
 _PREPARE_COMMAND_TIMEOUT = 600  # seconds
+
+
+_SHELL_METACHARACTERS = frozenset("&|;<>()$`\\\"'*?#~=!{}[]")
+
+
+def _needs_shell(command: str) -> bool:
+    """Return True if the command contains shell metacharacters that require bash -c."""
+    return any(ch in _SHELL_METACHARACTERS for ch in command)
 
 
 def _run_prepare_command(
@@ -575,10 +690,25 @@ def _run_prepare_command(
     env_mode: str = "project",
     timeout: int = _PREPARE_COMMAND_TIMEOUT,
 ) -> subprocess.CompletedProcess[str]:
+    import shlex
+
+    if _needs_shell(command):
+        # Security: log that we're using shell mode so it's auditable.
+        # Commands with shell metacharacters are wrapped in bash -c.
+        logger.info(
+            "Bootstrap step %s uses shell mode (command contains metacharacters): %s",
+            step_name, _redact_secrets(command),
+        )
+        argv = ["bash", "-c", command]
+    else:
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            argv = ["bash", "-c", command]
     try:
         result = subprocess.run(
-            command,
-            shell=True,
+            argv,
+            shell=False,
             cwd=str(working_dir),
             text=True,
             capture_output=True,

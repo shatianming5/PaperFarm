@@ -373,6 +373,8 @@ def do_demo(serve: bool = False, port: int = 8000) -> None:
         return
 
     console.print("Launching TUI with sample nanoGPT experiment data...\n")
+    console.print("[dim]Tabs: [bold]1[/bold] Command (overview)  [bold]2[/bold] Execution (metrics)  [bold]3[/bold] Logs  [bold]4[/bold] Docs[/dim]")
+    console.print("[dim]Actions: [bold]p[/bold] pause  [bold]s[/bold] skip  [bold]g[/bold] GPU status  [bold]l[/bold] log viewer  [bold]?[/bold] help[/dim]")
 
     with tempfile.TemporaryDirectory(prefix="or-demo-") as tmp:
         repo = Path(tmp)
@@ -385,13 +387,18 @@ def do_demo(serve: bool = False, port: int = 8000) -> None:
             t.start()
 
         app = ResearchApp(repo, on_ready=on_ready)
-        console.print("[dim]Press q to exit. Use 1-5 to switch tabs.[/dim]\n")
+        console.print("[dim]Press q to exit. Use 1-4 to switch tabs.[/dim]\n")
         app.run()
 
     console.print("\n[green]Demo complete![/green]")
     console.print(
         "To start with your own project:\n"
         "  [bold]cd your-project[/bold]\n"
-        "  [bold]open-researcher init[/bold]\n"
-        "  [bold]open-researcher run --agent claude-code[/bold]"
+        "  [bold]open-researcher run[/bold]                        # launch research (TUI)\n"
+        "  [bold]open-researcher status[/bold]                     # check progress\n"
+        "  [bold]open-researcher results[/bold]                    # view experiment table\n"
+        "  [bold]open-researcher results --chart primary[/bold]    # metric trend chart\n"
+        "  [bold]open-researcher doctor[/bold]                     # health check\n"
+        "  [bold]open-researcher hub list[/bold]                   # browse paper registry\n"
+        "  [bold]open-researcher run --help[/bold]                 # see all options"
     )

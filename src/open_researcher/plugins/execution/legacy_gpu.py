@@ -217,9 +217,14 @@ class GPUManager:
 
     def detect_remote(self, host: str, user: str) -> list[dict]:
         cmd = "nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free,utilization.gpu --format=csv"
+        # Security: use -l for user and -- to prevent option injection
+        ssh_argv: list[str] = ["ssh"]
+        if user:
+            ssh_argv += ["-l", user]
+        ssh_argv += ["--", host, cmd]
         try:
             result = subprocess.run(
-                ["ssh", f"{user}@{host}", cmd],
+                ssh_argv,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -351,11 +356,22 @@ class GPUManager:
     def effective_free_mb(self, gpu: dict) -> int:
         return self.effective_free_memory(gpu)
 
-    def estimate_packable_slots(self, *, default_memory_mb: int) -> int:
+    def estimate_packable_slots(self, *, default_memory_mb: int, max_per_gpu: int = 0) -> int:
+        """Estimate how many worker slots fit across all GPUs.
+
+        Parameters
+        ----------
+        default_memory_mb:
+            Assumed memory budget per worker.
+        max_per_gpu:
+            Hard cap on slots per GPU (0 = no cap).  Prevents worker explosion
+            when *default_memory_mb* is much smaller than actual GPU capacity.
+        """
         gpus = self.refresh()
         budget = max(int(default_memory_mb or 0), 0)
         if budget <= 0:
             return len(gpus)
+        per_gpu_cap = max(int(max_per_gpu or 0), 0)
         slots = 0
         for gpu in gpus:
             if any(
@@ -365,7 +381,17 @@ class GPUManager:
                 continue
             free_mb = self.effective_free_memory(gpu)
             if self.allow_same_gpu_packing:
-                slots += max(free_mb // budget, 0)
+                gpu_slots = max(free_mb // budget, 0)
+                if per_gpu_cap > 0:
+                    raw = gpu_slots
+                    gpu_slots = min(gpu_slots, per_gpu_cap)
+                    if raw > gpu_slots:
+                        gpu_id = gpu.get("index", gpu.get("device", gpu.get("id", "?")))
+                        logger.info(
+                            "GPU %s: capped from %d to %d slots (per-GPU cap=%d, budget=%dMiB, free=%dMiB)",
+                            gpu_id, raw, gpu_slots, per_gpu_cap, budget, free_mb,
+                        )
+                slots += gpu_slots
             elif not gpu.get("reservations") and free_mb >= budget:
                 slots += 1
         return slots

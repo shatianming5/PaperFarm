@@ -27,7 +27,7 @@ class TestFetchJsonErrorHandling:
 
         with patch("urllib.request.urlopen", side_effect=socket.timeout("timed out")):
             with pytest.raises(ValueError, match="Timeout"):
-                _fetch_json("http://example.com/test.json")
+                _fetch_json("https://example.com/test.json")
 
     def test_unicode_decode_error_raises_valueerror(self):
         from open_researcher.hub import _fetch_json
@@ -39,7 +39,7 @@ class TestFetchJsonErrorHandling:
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
             with pytest.raises(ValueError, match="Invalid encoding"):
-                _fetch_json("http://example.com/test.json")
+                _fetch_json("https://example.com/test.json")
 
     def test_empty_response_raises_valueerror(self):
         from open_researcher.hub import _fetch_json
@@ -51,7 +51,7 @@ class TestFetchJsonErrorHandling:
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
             with pytest.raises(ValueError, match="Empty response"):
-                _fetch_json("http://example.com/test.json")
+                _fetch_json("https://example.com/test.json")
 
     def test_url_error_reason_none(self):
         from open_researcher.hub import _fetch_json
@@ -59,7 +59,7 @@ class TestFetchJsonErrorHandling:
         exc = urllib.error.URLError(reason=None)
         with patch("urllib.request.urlopen", side_effect=exc):
             with pytest.raises(ValueError, match="Network error"):
-                _fetch_json("http://example.com/test.json")
+                _fetch_json("https://example.com/test.json")
 
     def test_valid_json_parses(self):
         from open_researcher.hub import _fetch_json
@@ -70,7 +70,7 @@ class TestFetchJsonErrorHandling:
         mock_resp.read.return_value = json.dumps({"key": "value"}).encode("utf-8")
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            result = _fetch_json("http://example.com/test.json")
+            result = _fetch_json("https://example.com/test.json")
             assert result == {"key": "value"}
 
 
@@ -96,7 +96,7 @@ class TestFetchIndexTypeValidation:
         mock_resp.read.return_value = json.dumps(index_data).encode("utf-8")
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            result = fetch_index("http://example.com")
+            result = fetch_index("https://example.com")
             assert "2507.19457" in result
             assert "2507.19458" in result
             # Non-string arxiv_id should be rejected
@@ -117,7 +117,7 @@ class TestFetchIndexTypeValidation:
         mock_resp.read.return_value = json.dumps(index_data).encode("utf-8")
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
-            result = fetch_index("http://example.com")
+            result = fetch_index("https://example.com")
             assert "2507.19457" not in result
             assert "2507.19458" in result
 

@@ -22,6 +22,14 @@ RUNTIME_OUTPUT_ROOTS = (
 
 OVERLAY_MANIFEST_FILENAME = "open_researcher_overlay_manifest.json"
 
+# Directories that should be symlinked (not copied) into worktrees so that
+# experiments can access large data assets without duplicating them.
+WORKTREE_SYMLINK_DATA_DIRS = {
+    "dataset",
+    "datasets",
+    "data",
+}
+
 OVERLAY_SKIP_PARTS = {
     ".git",
     ".research",
@@ -57,9 +65,17 @@ OVERLAY_SKIP_PARTS = {
 
 
 def normalize_relative_path(raw_path: str) -> str:
+    """Normalize a relative path, rejecting traversal and absolute paths."""
     normalized = raw_path.strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
+    # Security: reject absolute paths
+    if normalized.startswith("/"):
+        return ""
+    # Security: reject any path component that is ".." (covers a/.., a//../b, ../x, etc.)
+    for part in PurePosixPath(normalized).parts:
+        if part == "..":
+            return ""
     return normalized
 
 

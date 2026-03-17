@@ -57,13 +57,17 @@ class ResearchConfig:
     bootstrap_requires_gpu: bool = False
     hub_arxiv_id: str = ""
     hub_manifest_source: str = ""
+    hub_commands_reviewed: bool = False
+    hub_commands_digest: str = ""
     gpu_default_memory_per_worker_mb: int = 4096
     gpu_allow_same_gpu_packing: bool = True
     gpu_packing_signal: str = "memory_only"
     gpu_single_task_headroom_ratio: float = 0.10
     gpu_single_task_headroom_mb: int = 2048
     gpu_reservation_ttl_minutes: int = 240
+    gpu_max_workers_per_gpu: int = 3
     resource_profiles: dict = field(default_factory=dict)
+    worktree_symlink_dirs: list[str] = field(default_factory=list)
     role_agents: dict = field(default_factory=dict)
     agent_config: dict = field(default_factory=dict)
 
@@ -106,6 +110,66 @@ def _cfg_float(value, default: float) -> float:
         return default
 
 
+import re as _re
+
+# Security: conservative pattern for SSH host/user to prevent option injection
+# Accepts hostname, FQDN, IPv4, optional :port, or bracketed IPv6 [::1]
+_SSH_HOST_RE = _re.compile(
+    r"^(?:"
+    r"[a-zA-Z0-9._-]+(?:\.[a-zA-Z0-9._-]+)*"  # hostname/FQDN/IPv4
+    r"|"
+    r"\[[a-fA-F0-9:]+\]"  # bracketed IPv6
+    r")"
+    r"(?::\d+)?$"  # optional port
+)
+_SSH_USER_RE = _re.compile(r"^[a-zA-Z0-9._-]+$")
+
+
+def _validate_ssh_field(value: str, field: str) -> str:
+    """Validate an SSH host or user field, rejecting injection attempts."""
+    pattern = _SSH_HOST_RE if field == "host" else _SSH_USER_RE
+    if not value:
+        return value
+    if not pattern.match(value):
+        import logging
+        logging.getLogger(__name__).warning(
+            "Rejected unsafe SSH %s value: %r", field, value,
+        )
+        return ""
+    return value
+
+
+def _normalize_remote_hosts(raw: object) -> list[dict]:
+    """Normalize gpu.remote_hosts into a list of {host, user} dicts.
+
+    Validates host and user fields to prevent SSH option injection.
+    """
+    if not isinstance(raw, list):
+        return []
+    result: list[dict] = []
+    for item in raw:
+        if isinstance(item, dict):
+            host = _validate_ssh_field(str(item.get("host", "") or "").strip(), "host")
+            user = _validate_ssh_field(str(item.get("user", "") or "").strip(), "user")
+            if host:
+                result.append({"host": host, "user": user})
+        elif isinstance(item, str):
+            # Legacy string form: "user@host" or "host"
+            text = item.strip()
+            if not text:
+                continue
+            if "@" in text:
+                user_part, host_part = text.split("@", 1)
+                host = _validate_ssh_field(host_part.strip(), "host")
+                user = _validate_ssh_field(user_part.strip(), "user")
+            else:
+                host = _validate_ssh_field(text, "host")
+                user = ""
+            if host:
+                result.append({"host": host, "user": user})
+    return result
+
+
 def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
     """Load and parse config.yaml into a typed dataclass."""
     raw = _read_config_payload(research_dir, strict=strict)
@@ -139,7 +203,7 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         direction=metrics.get("direction", ""),
         web_search=research.get("web_search", True),
         search_interval=_cfg_int(research.get("search_interval"), 5),
-        remote_hosts=gpu.get("remote_hosts", []),
+        remote_hosts=_normalize_remote_hosts(gpu.get("remote_hosts", [])),
         enable_gpu_allocation=runtime.get("gpu_allocation", True),
         enable_failure_memory=runtime.get("failure_memory", True),
         enable_worktree_isolation=runtime.get("worktree_isolation", True),
@@ -170,13 +234,19 @@ def load_config(research_dir: Path, *, strict: bool = False) -> ResearchConfig:
         bootstrap_requires_gpu=bool(bootstrap.get("requires_gpu", False)),
         hub_arxiv_id=str(bootstrap.get("hub_arxiv_id", "") or ""),
         hub_manifest_source=str(bootstrap.get("hub_manifest_source", "") or ""),
+        hub_commands_reviewed=bool(bootstrap.get("hub_commands_reviewed", False)),
+        hub_commands_digest=str(bootstrap.get("hub_commands_digest", "") or ""),
         gpu_default_memory_per_worker_mb=max(_cfg_int(gpu.get("default_memory_per_worker_mb"), 4096), 0),
         gpu_allow_same_gpu_packing=bool(gpu.get("allow_same_gpu_packing", True)),
         gpu_packing_signal=str(gpu.get("packing_signal", "memory_only") or "memory_only"),
         gpu_single_task_headroom_ratio=max(_cfg_float(gpu.get("single_task_headroom_ratio"), 0.10), 0.0),
         gpu_single_task_headroom_mb=max(_cfg_int(gpu.get("single_task_headroom_mb"), 2048), 0),
         gpu_reservation_ttl_minutes=max(_cfg_int(gpu.get("reservation_ttl_minutes"), 240), 0),
+        gpu_max_workers_per_gpu=max(_cfg_int(gpu.get("max_workers_per_gpu"), 3), 1),
         resource_profiles=resources.get("profiles", {}) if isinstance(resources.get("profiles", {}), dict) else {},
+        worktree_symlink_dirs=runtime.get("worktree_symlink_dirs", [])
+        if isinstance(runtime.get("worktree_symlink_dirs", []), list)
+        else [],
         role_agents=roles if isinstance(roles, dict) else {},
         agent_config=raw.get("agents", {}),
     )

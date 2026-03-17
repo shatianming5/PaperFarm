@@ -18,7 +18,15 @@ console = Console()
 
 app = typer.Typer(
     name="open-researcher",
-    help="Research workflow framework for AI agents. Initialize automated experiment tracking in any repo.",
+    help=(
+        "Research workflow framework for AI agents.\n\n"
+        "Quick start:\n"
+        "  1. open-researcher run          Launch or resume research (TUI)\n"
+        "  2. open-researcher status        Check current progress\n"
+        "  3. open-researcher results       View experiment results\n"
+        "  4. open-researcher doctor        Health check\n"
+        "  5. open-researcher demo          Try with sample data\n"
+    ),
 )
 
 app.add_typer(ideas_app, name="ideas")
@@ -225,7 +233,13 @@ def demo(
 
 @app.command()
 def init(tag: str = typer.Option(None, help="Experiment tag (e.g. mar8). Defaults to today's date.")):
-    """Initialize .research/ directory in the current repo."""
+    """Initialize .research/ directory in the current repo.
+
+    \b
+    Examples:
+      open-researcher init               # auto-tag with today's date
+      open-researcher init --tag mar10   # use custom tag
+    """
     from open_researcher.init_cmd import do_init
 
     do_init(repo_path=Path.cwd(), tag=tag)
@@ -235,7 +249,13 @@ def init(tag: str = typer.Option(None, help="Experiment tag (e.g. mar8). Default
 def status(
     sparkline: bool = typer.Option(False, "--sparkline", help="Show metric sparkline"),
 ):
-    """Show current research progress."""
+    """Show current research progress.
+
+    \b
+    Examples:
+      open-researcher status                # summary with experiment counts
+      open-researcher status --sparkline    # include metric trend sparkline
+    """
     from open_researcher.status_cmd import print_status
 
     print_status(Path.cwd(), sparkline=sparkline)
@@ -247,7 +267,15 @@ def results(
     json_out: bool = typer.Option(False, "--json", help="Output as JSON"),
     last: int = typer.Option(None, "--last", help="Show only last N experiments"),
 ):
-    """Print experiment results table."""
+    """Print experiment results table.
+
+    \b
+    Examples:
+      open-researcher results                    # full table
+      open-researcher results --chart primary     # metric trend chart
+      open-researcher results --last 5            # last 5 experiments
+      open-researcher results --json              # machine-readable JSON
+    """
     from open_researcher.results_cmd import print_results, print_results_chart, print_results_json
 
     if json_out:
@@ -261,7 +289,12 @@ def results(
 
 @app.command()
 def export():
-    """Export experiment report as Markdown."""
+    """Export experiment report as Markdown.
+
+    \b
+    Examples:
+      open-researcher export    # writes report to .research/report.md
+    """
     from open_researcher.export_cmd import do_export
 
     do_export(Path.cwd())
@@ -269,7 +302,12 @@ def export():
 
 @app.command()
 def doctor():
-    """Run health checks on the research environment."""
+    """Run health checks on the research environment.
+
+    \b
+    Examples:
+      open-researcher doctor    # check agents, GPU, .research/ integrity
+    """
     from open_researcher.doctor_cmd import print_doctor
 
     print_doctor(Path.cwd())
@@ -279,19 +317,32 @@ def doctor():
 def run(
     agent: str = typer.Option(None, help="Agent to use (claude-code, codex, aider, opencode, kimi-cli, gemini-cli)."),
     tag: str = typer.Option(None, help="Experiment tag when bootstrapping a new workflow."),
-    mode: str = typer.Option("interactive", "--mode", help="Run mode: `interactive` or `headless`."),
+    mode: str = typer.Option("interactive", "--mode", help="Run mode: `interactive` (TUI) or `headless` (requires --goal)."),
     headless: bool = typer.Option(False, "--headless", hidden=True, help="Deprecated; use `--mode headless`."),
     workers: Optional[int] = typer.Option(
         None,
         "--workers",
         help="Experiment worker count. `1` runs serially, `>1` enables parallel experiment workers.",
     ),
-    goal: str = typer.Option(None, "--goal", help="Research goal for bootstrap/headless mode."),
+    goal: str = typer.Option(None, "--goal", help="Research goal (required for headless; only valid on first run)."),
     max_experiments: int = typer.Option(0, "--max-experiments", help="Stop after N experiments (0 = unlimited)."),
     token_budget: int = typer.Option(0, "--token-budget", help="Stop/warn after N total tokens (0 = unlimited)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show the command without executing."),
 ):
-    """Primary workflow command: bootstrap if needed, otherwise run the existing workflow."""
+    """Launch or resume the research workflow.
+
+    \b
+    First run (bootstrap): creates .research/, analyzes the repo, and starts experimenting.
+    Subsequent runs: resumes the existing workflow from where it left off.
+
+    \b
+    Examples:
+      open-researcher run                          # Interactive TUI, auto-detect agent
+      open-researcher run --agent claude-code      # Use a specific agent
+      open-researcher run --mode headless --goal "reduce val_loss"  # Headless mode
+      open-researcher run --dry-run                # Preview without executing
+      open-researcher run --max-experiments 10     # Stop after 10 experiments
+    """
     _dispatch_workflow(
         repo_path=Path.cwd(),
         agent=agent,
