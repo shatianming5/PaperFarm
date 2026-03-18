@@ -284,3 +284,74 @@ def review(
     console.print("  --skip           Skip this review")
     console.print("  --reject ID      Reject a frontier item")
     console.print("  --priority ID=N  Adjust priority")
+
+
+# ---------------------------------------------------------------------------
+# inject
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def inject(
+    repo: Path = typer.Argument(..., help="Path to target repo"),
+    desc: str = typer.Option(..., help="Experiment description"),
+    priority: int = typer.Option(3, help="Priority (1-5, higher=first)"),
+) -> None:
+    """Inject a human-authored experiment into the frontier."""
+    from .state import ResearchState
+
+    research_dir = _resolve_research_dir(repo)
+    if not research_dir.is_dir():
+        console.print("[red]No .research directory found[/red]")
+        raise typer.Exit(code=1)
+
+    state = ResearchState(research_dir)
+    graph = state.load_graph()
+    counter = graph.get("counters", {}).get("frontier", 0) + 1
+    item = {
+        "id": f"frontier-{counter:03d}",
+        "description": desc,
+        "priority": priority,
+        "status": "approved",
+        "selection_reason_code": "human_injected",
+        "hypothesis_id": "",
+        "experiment_spec_id": "",
+    }
+    graph.setdefault("frontier", []).append(item)
+    graph.setdefault("counters", {})["frontier"] = counter
+    state.save_graph(graph)
+    state.append_log({"event": "human_injected", "frontier_id": item["id"]})
+    console.print(f"Injected: {item['id']} — {desc}")
+
+
+# ---------------------------------------------------------------------------
+# constrain
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def constrain(
+    repo: Path = typer.Argument(..., help="Path to target repo"),
+    add: str = typer.Option("", help="Add a constraint"),
+) -> None:
+    """Add user constraints for the research direction."""
+    from .state import ResearchState
+
+    research_dir = _resolve_research_dir(repo)
+    if not research_dir.is_dir():
+        console.print("[red]No .research directory found[/red]")
+        raise typer.Exit(code=1)
+
+    state = ResearchState(research_dir)
+    path = research_dir / "user_constraints.md"
+
+    if add:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"- {add}\n")
+        state.append_log({"event": "goal_updated"})
+        console.print(f"Added constraint: {add}")
+    else:
+        if path.exists():
+            console.print(path.read_text(encoding="utf-8"))
+        else:
+            console.print("[dim]No constraints set.[/dim]")

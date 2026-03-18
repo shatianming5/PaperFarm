@@ -26,12 +26,14 @@ class TestImport:
         assert hasattr(cli, "app")
 
     def test_import_commands(self):
-        from open_researcher_v2.cli import run, status, results, review  # noqa: F811
+        from open_researcher_v2.cli import run, status, results, review, inject, constrain  # noqa: F811
 
         assert callable(run)
         assert callable(status)
         assert callable(results)
         assert callable(review)
+        assert callable(inject)
+        assert callable(constrain)
 
     def test_auto_tag_format(self):
         tag = _auto_tag()
