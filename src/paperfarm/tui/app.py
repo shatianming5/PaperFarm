@@ -31,10 +31,6 @@ from paperfarm.tui.widgets import (
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# ResearchApp
-# ---------------------------------------------------------------------------
-
 
 class ResearchApp(App):
     """Polling-based TUI for monitoring and controlling a research session."""
@@ -61,7 +57,9 @@ class ResearchApp(App):
         self.state = state
         self.runner = runner
         self._runner_thread: threading.Thread | None = None
+        # Only set for unhandled exceptions in runner (not normal exit codes).
         self._runner_error: str | None = None
+        self._error_shown = False
 
     # -- layout -------------------------------------------------------------
 
@@ -91,15 +89,28 @@ class ResearchApp(App):
             self._runner_thread.start()
 
     def _run_runner(self) -> None:
-        """Execute the runner callable; capture errors for TUI display."""
+        """Execute the runner callable.
+
+        Normal failures (non-zero rc) are reported via state events
+        (session_ended). Only unhandled exceptions are captured here.
+        """
         try:
             if self.runner is not None:
-                rc = self.runner()
-                if rc and rc != 0:
-                    self._runner_error = f"Research session exited with code {rc}"
+                self.runner()
         except Exception:
-            self._runner_error = traceback.format_exc()
+            tb = traceback.format_exc()
+            self._runner_error = tb
             logger.exception("Runner thread crashed")
+            # Try to record it in state so the log panel picks it up
+            try:
+                self.state.update_phase("crashed")
+                self.state.append_log({
+                    "event": "session_ended",
+                    "status": "crashed",
+                    "error": tb[:500],
+                })
+            except Exception:
+                pass
 
     # -- polling (non-blocking) ---------------------------------------------
 
@@ -114,7 +125,6 @@ class ResearchApp(App):
             "frontier": graph.get("frontier", []),
             "events": events,
             "results": results,
-            "runner_error": self._runner_error,
         }
 
     async def _poll_state(self) -> None:
@@ -146,10 +156,6 @@ class ResearchApp(App):
 
             chart: MetricChart = self.query_one("#chart", MetricChart)
             chart.update_data(data["results"])
-
-            # Show runner crash in log panel
-            if data.get("runner_error"):
-                log_panel.show_error(data["runner_error"])
         except Exception:
             logger.debug("poll widget update failed", exc_info=True)
 

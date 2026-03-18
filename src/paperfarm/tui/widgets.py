@@ -12,15 +12,10 @@ from typing import Any
 from textual.containers import Vertical
 from textual.widgets import DataTable, RichLog, Static
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _PHASES = ("scout", "manager", "critic", "experiment")
 
 
 def _ts_short(iso: str) -> str:
-    """Convert an ISO timestamp to a compact ``HH:MM:SS`` string."""
     try:
         dt = datetime.fromisoformat(iso)
     except (ValueError, TypeError):
@@ -49,6 +44,8 @@ class StatsBar(Static):
             suffix = " [bold yellow][PAUSED][/]"
         if phase == "failed":
             phase_str = "[bold red]FAILED[/]"
+        elif phase == "crashed":
+            phase_str = "[bold red]CRASHED[/]"
         else:
             phase_str = phase
         self.update(
@@ -63,9 +60,10 @@ class StatsBar(Static):
 
 
 class PhaseStripBar(Static):
-    """Horizontal phase indicator highlighting the active phase in green."""
+    """Horizontal phase indicator highlighting the active phase."""
 
-    _last_phase: str = ""
+    def on_mount(self) -> None:
+        self._last_phase = ""
 
     def update_phase(self, phase: str) -> None:
         if phase == self._last_phase:
@@ -77,6 +75,11 @@ class PhaseStripBar(Static):
                 parts.append(f"[bold green]{p.upper()}[/]")
             else:
                 parts.append(f"[dim]{p}[/]")
+        # Show terminal states after the pipeline
+        if phase in ("failed", "crashed"):
+            parts.append(f"  [bold red]\u2717 {phase.upper()}[/]")
+        elif phase == "idle":
+            pass  # no extra indicator
         self.update("  \u2023  ".join(parts))
 
 
@@ -88,7 +91,8 @@ class PhaseStripBar(Static):
 class FrontierPanel(Vertical):
     """DataTable listing frontier items sorted by priority."""
 
-    _last_ids: list[str] = []
+    def on_mount(self) -> None:
+        self._last_ids: list[str] = []
 
     def compose(self):  # type: ignore[override]
         table = DataTable(id="frontier-table")
@@ -120,7 +124,8 @@ class FrontierPanel(Vertical):
 class WorkerPanel(Vertical):
     """DataTable showing live worker status."""
 
-    _last_snapshot: list[str] = []
+    def on_mount(self) -> None:
+        self._last_snapshot: list[str] = []
 
     def compose(self):  # type: ignore[override]
         table = DataTable(id="worker-table")
@@ -165,14 +170,22 @@ _EVENT_PREFIXES: dict[str, str] = {
 class LogPanel(Vertical):
     """Append-only rich log display — incremental updates, no flicker."""
 
-    _seen_count: int = 0
+    def on_mount(self) -> None:
+        self._seen_count = 0
 
     def compose(self):  # type: ignore[override]
         yield RichLog(id="log-view", highlight=True, markup=True, wrap=True)
 
     def update_data(self, events: list[dict[str, Any]]) -> None:
-        if len(events) <= self._seen_count:
+        n = len(events)
+        # Handle log rotation / new session (count shrank)
+        if n < self._seen_count:
+            self._seen_count = 0
+            self.query_one("#log-view", RichLog).clear()
+
+        if n <= self._seen_count:
             return
+
         log: RichLog = self.query_one("#log-view", RichLog)
         new_events = events[self._seen_count:]
         for ev in new_events:
@@ -181,7 +194,6 @@ class LogPanel(Vertical):
             prefix = _EVENT_PREFIXES.get(etype, f"[dim]{etype}[/]")
             msg = ev.get("message", ev.get("msg", ev.get("line", "")))
 
-            # Skill completed: color by exit code
             if etype == "skill_completed":
                 rc = ev.get("exit_code", 0)
                 step = ev.get("step", "")
@@ -192,12 +204,14 @@ class LogPanel(Vertical):
                     prefix = "[bold red]FAIL\u2717[/]"
                     msg = f"{step} (exit_code={rc})"
 
-            # Session ended: color by status
             elif etype == "session_ended":
                 status = ev.get("status", "")
                 if status == "completed":
                     prefix = "[bold green]SESSION\u2713[/]"
                     msg = "Research session completed"
+                elif status == "crashed":
+                    prefix = "[bold red]CRASH[/]"
+                    msg = ev.get("error", "Runner exception")
                 else:
                     prefix = "[bold red]SESSION\u2717[/]"
                     stage = ev.get("stage", "unknown")
@@ -208,12 +222,7 @@ class LogPanel(Vertical):
                 msg = ev.get("step", ev.get("skill", ""))
 
             log.write(f"[dim]{ts}[/] {prefix} {msg}")
-        self._seen_count = len(events)
-
-    def show_error(self, error_text: str) -> None:
-        """Show a runner crash error in the log."""
-        log: RichLog = self.query_one("#log-view", RichLog)
-        log.write(f"[bold red]RUNNER CRASH:[/]\n{error_text}")
+        self._seen_count = n
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +233,8 @@ class LogPanel(Vertical):
 class MetricChart(Static):
     """Simple text-based chart of kept result values using plotext."""
 
-    _last_count: int = -1
+    def on_mount(self) -> None:
+        self._last_count = -1
 
     def update_data(self, results: list[dict[str, Any]]) -> None:
         kept = [r for r in results if r.get("status") == "keep"]
