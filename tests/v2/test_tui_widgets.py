@@ -41,8 +41,10 @@ _SAMPLE_FRONTIER = [
 ]
 
 _SAMPLE_EVENTS = [
-    {"ts": "2026-03-18T10:00:00+00:00", "type": "skill_started", "message": "Running scout"},
-    {"ts": "2026-03-18T10:01:00+00:00", "type": "skill_completed", "message": "Scout done"},
+    # "event"/"line" format (as written by skill_runner)
+    {"ts": "2026-03-18T10:00:00+00:00", "event": "skill_started", "line": "Running scout"},
+    {"ts": "2026-03-18T10:01:00+00:00", "event": "skill_completed", "line": "Scout done"},
+    # "type"/"message" format (backward compat)
     {"ts": "2026-03-18T10:02:00+00:00", "type": "experiment_result", "message": "F-1 value=0.87"},
     {"ts": "2026-03-18T10:03:00+00:00", "type": "output", "msg": "Some output line"},
 ]
@@ -170,3 +172,36 @@ class TestWidgetUpdate:
             stats: StatsBar = app.query_one("#stats", StatsBar)
             stats.update_data(summary)
             assert "PAUSED" in str(stats.content)
+
+    @pytest.mark.asyncio
+    async def test_review_indicator_display(self, app: _TestApp) -> None:
+        async with app.run_test() as pilot:
+            summary = dict(
+                _SAMPLE_SUMMARY,
+                awaiting_review={"type": "hypothesis_review", "requested_at": "now"},
+            )
+            stats: StatsBar = app.query_one("#stats", StatsBar)
+            stats.update_data(summary)
+            content = str(stats.content)
+            assert "REVIEW" in content
+            assert "HYPOTHESIS REVIEW" in content
+
+
+# ---------------------------------------------------------------------------
+# TestLogPanelReviewEvents
+# ---------------------------------------------------------------------------
+
+
+class TestLogPanelReviewEvents:
+    """Verify new review-related event prefixes exist."""
+
+    def test_review_event_prefixes_exist(self) -> None:
+        from open_researcher_v2.tui.widgets import _EVENT_PREFIXES
+
+        assert "review_requested" in _EVENT_PREFIXES
+        assert "review_completed" in _EVENT_PREFIXES
+        assert "human_injected" in _EVENT_PREFIXES
+        assert "human_override" in _EVENT_PREFIXES
+        assert "goal_updated" in _EVENT_PREFIXES
+        assert "review_timeout" in _EVENT_PREFIXES
+        assert "review_skipped" in _EVENT_PREFIXES

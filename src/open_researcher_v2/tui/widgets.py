@@ -44,10 +44,16 @@ class StatsBar(Static):
         total = summary.get("experiments_total", 0)
         running = summary.get("experiments_running", 0)
         best = summary.get("best_value", "\u2014")
-        paused = " [PAUSED]" if summary.get("paused") else ""
+        suffix = ""
+        if summary.get("paused"):
+            suffix = " [PAUSED]"
+        review = summary.get("awaiting_review")
+        if review:
+            rtype = review.get("type", "").replace("_", " ").upper()
+            suffix = f" \u23f3 REVIEW {rtype}"
         self.update(
             f"Phase: {phase} | Round: {rnd} | Hyps: {hyps} "
-            f"| Exps: {done}/{total} ({running}) | Best: {best}{paused}"
+            f"| Exps: {done}/{total} ({running}) | Best: {best}{suffix}"
         )
 
 
@@ -82,10 +88,17 @@ class FrontierPanel(Vertical):
         table.add_columns("ID", "Priority", "Status", "Description")
         yield table
 
+    @staticmethod
+    def _safe_priority(item: dict) -> float:
+        try:
+            return float(item.get("priority", 0))
+        except (ValueError, TypeError):
+            return 0.0
+
     def update_data(self, frontier: list[dict[str, Any]]) -> None:
         table: DataTable = self.query_one("#frontier-table", DataTable)
         table.clear()
-        items = sorted(frontier, key=lambda f: -float(f.get("priority", 0)))
+        items = sorted(frontier, key=lambda f: -self._safe_priority(f))
         for item in items:
             table.add_row(
                 str(item.get("id", "")),
@@ -131,6 +144,13 @@ _EVENT_PREFIXES: dict[str, str] = {
     "worker_started": "[blue]W+[/]",
     "worker_finished": "[blue]W-[/]",
     "experiment_result": "[yellow]RES[/]",
+    "review_requested": "[bold yellow]WAIT[/]",
+    "review_completed": "[green]REVW[/]",
+    "review_timeout": "[yellow]TOUT[/]",
+    "review_skipped": "[dim]SKIP[/]",
+    "human_injected": "[bold cyan]INJ[/]",
+    "human_override": "[bold magenta]OVRD[/]",
+    "goal_updated": "[cyan]GOAL[/]",
 }
 
 
@@ -145,9 +165,9 @@ class LogPanel(Vertical):
         log.clear()
         for ev in events:
             ts = _ts_short(ev.get("ts", ""))
-            etype = ev.get("type", "info")
+            etype = ev.get("event", ev.get("type", "info"))
             prefix = _EVENT_PREFIXES.get(etype, f"[dim]{etype}[/]")
-            msg = ev.get("message", ev.get("msg", ""))
+            msg = ev.get("message", ev.get("msg", ev.get("line", "")))
             log.write(f"[dim]{ts}[/] {prefix} {msg}")
 
 
