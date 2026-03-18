@@ -104,6 +104,16 @@ def run(
 
     state = ResearchState(research_dir)
     adapter = create_agent(agent_name, config=agent_config if agent_config else None)
+
+    # Pre-flight: verify agent CLI is installed
+    if not adapter.check_installed():
+        console.print(
+            f"[red]Error:[/red] agent [bold]{agent_name}[/bold] "
+            f"not found (command: [bold]{adapter.command}[/bold]). "
+            f"Is it installed and on PATH?"
+        )
+        raise typer.Exit(code=1)
+
     agent = Agent(adapter)
 
     if headless:

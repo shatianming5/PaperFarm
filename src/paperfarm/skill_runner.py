@@ -240,9 +240,18 @@ class SkillRunner:
 
         Returns 0 on clean completion, or a non-zero exit code on failure.
         """
+        self.state.append_log({"event": "session_started"})
+
         # -- bootstrap --
         rc = self.run_bootstrap()
         if rc != 0:
+            self.state.update_phase("failed")
+            self.state.append_log({
+                "event": "session_ended",
+                "status": "failed",
+                "stage": "bootstrap",
+                "exit_code": rc,
+            })
             return rc
 
         # -- loop rounds --
@@ -264,6 +273,13 @@ class SkillRunner:
                 # Skipped — continue to next round
                 continue
             if rc != 0:
+                self.state.update_phase("failed")
+                self.state.append_log({
+                    "event": "session_ended",
+                    "status": "failed",
+                    "stage": f"round_{round_num}",
+                    "exit_code": rc,
+                })
                 return rc
 
             # Check if all frontier items are terminal
@@ -275,4 +291,5 @@ class SkillRunner:
                 break
 
         self.state.update_phase("idle")
+        self.state.append_log({"event": "session_ended", "status": "completed"})
         return 0

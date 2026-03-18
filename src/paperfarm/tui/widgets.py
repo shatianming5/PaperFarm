@@ -6,7 +6,7 @@ accepts plain dicts/lists produced by ``ResearchState.summary()``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from textual.containers import Vertical
@@ -44,10 +44,16 @@ class StatsBar(Static):
         total = summary.get("experiments_total", 0)
         running = summary.get("experiments_running", 0)
         best = summary.get("best_value", "\u2014")
-        paused = " [PAUSED]" if summary.get("paused") else ""
+        suffix = ""
+        if summary.get("paused"):
+            suffix = " [bold yellow][PAUSED][/]"
+        if phase == "failed":
+            phase_str = "[bold red]FAILED[/]"
+        else:
+            phase_str = phase
         self.update(
-            f"Phase: {phase} | Round: {rnd} | Hyps: {hyps} "
-            f"| Exps: {done}/{total} ({running}) | Best: {best}{paused}"
+            f"Phase: {phase_str} | Round: {rnd} | Hyps: {hyps} "
+            f"| Exps: {done}/{total} ({running}) | Best: {best}{suffix}"
         )
 
 
@@ -59,7 +65,12 @@ class StatsBar(Static):
 class PhaseStripBar(Static):
     """Horizontal phase indicator highlighting the active phase in green."""
 
+    _last_phase: str = ""
+
     def update_phase(self, phase: str) -> None:
+        if phase == self._last_phase:
+            return
+        self._last_phase = phase
         parts: list[str] = []
         for p in _PHASES:
             if p == phase:
@@ -77,15 +88,21 @@ class PhaseStripBar(Static):
 class FrontierPanel(Vertical):
     """DataTable listing frontier items sorted by priority."""
 
+    _last_ids: list[str] = []
+
     def compose(self):  # type: ignore[override]
         table = DataTable(id="frontier-table")
         table.add_columns("ID", "Priority", "Status", "Description")
         yield table
 
     def update_data(self, frontier: list[dict[str, Any]]) -> None:
+        items = sorted(frontier, key=lambda f: -float(f.get("priority", 0)))
+        new_ids = [str(i.get("id", "")) + str(i.get("status", "")) for i in items]
+        if new_ids == self._last_ids:
+            return
+        self._last_ids = new_ids
         table: DataTable = self.query_one("#frontier-table", DataTable)
         table.clear()
-        items = sorted(frontier, key=lambda f: -float(f.get("priority", 0)))
         for item in items:
             table.add_row(
                 str(item.get("id", "")),
@@ -103,12 +120,18 @@ class FrontierPanel(Vertical):
 class WorkerPanel(Vertical):
     """DataTable showing live worker status."""
 
+    _last_snapshot: list[str] = []
+
     def compose(self):  # type: ignore[override]
         table = DataTable(id="worker-table")
         table.add_columns("Worker", "Status", "GPU", "Frontier")
         yield table
 
     def update_data(self, workers: list[dict[str, Any]]) -> None:
+        snap = [f"{w.get('id')}-{w.get('status')}" for w in workers]
+        if snap == self._last_snapshot:
+            return
+        self._last_snapshot = snap
         table: DataTable = self.query_one("#worker-table", DataTable)
         table.clear()
         for w in workers:
@@ -126,29 +149,71 @@ class WorkerPanel(Vertical):
 
 _EVENT_PREFIXES: dict[str, str] = {
     "skill_started": "[cyan]SKILL[/]",
-    "skill_completed": "[green]DONE[/]",
+    "agent_output": "[white]OUT[/]",
     "output": "[white]OUT[/]",
     "worker_started": "[blue]W+[/]",
     "worker_finished": "[blue]W-[/]",
     "experiment_result": "[yellow]RES[/]",
+    "round_started": "[magenta]RND+[/]",
+    "round_completed": "[green]RND\u2713[/]",
+    "session_started": "[bold cyan]START[/]",
+    "loop_paused": "[yellow]PAUSE[/]",
+    "frontier_complete": "[green]FRONTIER\u2713[/]",
 }
 
 
 class LogPanel(Vertical):
-    """Append-only rich log display."""
+    """Append-only rich log display — incremental updates, no flicker."""
+
+    _seen_count: int = 0
 
     def compose(self):  # type: ignore[override]
         yield RichLog(id="log-view", highlight=True, markup=True, wrap=True)
 
     def update_data(self, events: list[dict[str, Any]]) -> None:
+        if len(events) <= self._seen_count:
+            return
         log: RichLog = self.query_one("#log-view", RichLog)
-        log.clear()
-        for ev in events:
+        new_events = events[self._seen_count:]
+        for ev in new_events:
             ts = _ts_short(ev.get("ts", ""))
-            etype = ev.get("type", "info")
+            etype = ev.get("event", ev.get("type", "info"))
             prefix = _EVENT_PREFIXES.get(etype, f"[dim]{etype}[/]")
-            msg = ev.get("message", ev.get("msg", ""))
+            msg = ev.get("message", ev.get("msg", ev.get("line", "")))
+
+            # Skill completed: color by exit code
+            if etype == "skill_completed":
+                rc = ev.get("exit_code", 0)
+                step = ev.get("step", "")
+                if rc == 0:
+                    prefix = "[green]DONE\u2713[/]"
+                    msg = msg or step
+                else:
+                    prefix = "[bold red]FAIL\u2717[/]"
+                    msg = f"{step} (exit_code={rc})"
+
+            # Session ended: color by status
+            elif etype == "session_ended":
+                status = ev.get("status", "")
+                if status == "completed":
+                    prefix = "[bold green]SESSION\u2713[/]"
+                    msg = "Research session completed"
+                else:
+                    prefix = "[bold red]SESSION\u2717[/]"
+                    stage = ev.get("stage", "unknown")
+                    rc = ev.get("exit_code", "?")
+                    msg = f"Failed at {stage} (exit_code={rc})"
+
+            elif not msg:
+                msg = ev.get("step", ev.get("skill", ""))
+
             log.write(f"[dim]{ts}[/] {prefix} {msg}")
+        self._seen_count = len(events)
+
+    def show_error(self, error_text: str) -> None:
+        """Show a runner crash error in the log."""
+        log: RichLog = self.query_one("#log-view", RichLog)
+        log.write(f"[bold red]RUNNER CRASH:[/]\n{error_text}")
 
 
 # ---------------------------------------------------------------------------
@@ -159,8 +224,14 @@ class LogPanel(Vertical):
 class MetricChart(Static):
     """Simple text-based chart of kept result values using plotext."""
 
+    _last_count: int = -1
+
     def update_data(self, results: list[dict[str, Any]]) -> None:
         kept = [r for r in results if r.get("status") == "keep"]
+        if len(kept) == self._last_count:
+            return
+        self._last_count = len(kept)
+
         if not kept:
             self.update("[dim]No kept results yet.[/]")
             return

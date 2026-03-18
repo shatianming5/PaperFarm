@@ -363,7 +363,11 @@ class ResearchState:
     # -- summary ------------------------------------------------------------
 
     def summary(self) -> dict[str, Any]:
-        """Aggregate state snapshot for TUI / status display."""
+        """Aggregate state snapshot for TUI / status display.
+
+        The returned dict includes a ``_graph`` key with the full graph
+        data so that callers can avoid a second ``load_graph()`` call.
+        """
         graph = self.load_graph()
         results = self.load_results()
         activity = self.load_activity()
@@ -390,4 +394,5 @@ class ResearchState:
             "best_value": best,
             "workers": activity.get("workers", []),
             "paused": activity.get("control", {}).get("paused", False),
+            "_graph": graph,
         }

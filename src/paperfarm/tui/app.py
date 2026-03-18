@@ -8,7 +8,10 @@ can monitor a live research session.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import threading
+import traceback
 from typing import Any, Callable
 
 from textual.app import App, ComposeResult
@@ -26,24 +29,15 @@ from paperfarm.tui.widgets import (
     WorkerPanel,
 )
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # ResearchApp
 # ---------------------------------------------------------------------------
 
 
 class ResearchApp(App):
-    """Polling-based TUI for monitoring and controlling a research session.
-
-    Parameters
-    ----------
-    repo_path:
-        Path to the repository root (informational only).
-    state:
-        A :class:`ResearchState` instance for reading/writing state files.
-    runner:
-        An optional callable to execute in a daemon thread.  Typically
-        this is the orchestration loop that drives the research.
-    """
+    """Polling-based TUI for monitoring and controlling a research session."""
 
     CSS_PATH = "styles.css"
     TITLE = "PaperFarm"
@@ -67,6 +61,7 @@ class ResearchApp(App):
         self.state = state
         self.runner = runner
         self._runner_thread: threading.Thread | None = None
+        self._runner_error: str | None = None
 
     # -- layout -------------------------------------------------------------
 
@@ -88,31 +83,51 @@ class ResearchApp(App):
     # -- lifecycle ----------------------------------------------------------
 
     def on_mount(self) -> None:
-        """Start polling and optionally the runner thread."""
         self.set_interval(1.0, self._poll_state)
         if self.runner is not None:
             self._runner_thread = threading.Thread(
-                target=self._run_runner, daemon=True
+                target=self._run_runner, daemon=True, name="pf-runner"
             )
             self._runner_thread.start()
 
     def _run_runner(self) -> None:
-        """Execute the runner callable; exceptions are silently ignored."""
+        """Execute the runner callable; capture errors for TUI display."""
         try:
             if self.runner is not None:
-                self.runner()
+                rc = self.runner()
+                if rc and rc != 0:
+                    self._runner_error = f"Research session exited with code {rc}"
         except Exception:
-            pass
+            self._runner_error = traceback.format_exc()
+            logger.exception("Runner thread crashed")
 
-    # -- polling ------------------------------------------------------------
+    # -- polling (non-blocking) ---------------------------------------------
 
-    def _poll_state(self) -> None:
-        """Read state files and push data to widgets.
+    def _read_state_sync(self) -> dict[str, Any]:
+        """Read all state files (runs in thread pool, NOT event loop)."""
+        summary = self.state.summary()
+        graph = summary.pop("_graph", None) or self.state.load_graph()
+        events = self.state.tail_log(50)
+        results = self.state.load_results()
+        return {
+            "summary": summary,
+            "frontier": graph.get("frontier", []),
+            "events": events,
+            "results": results,
+            "runner_error": self._runner_error,
+        }
 
-        All exceptions are caught to ensure polling never crashes the TUI.
-        """
+    async def _poll_state(self) -> None:
+        """Poll state in a thread, then update widgets on the main loop."""
         try:
-            summary = self.state.summary()
+            loop = asyncio.get_running_loop()
+            data = await loop.run_in_executor(None, self._read_state_sync)
+        except Exception:
+            logger.debug("poll read failed", exc_info=True)
+            return
+
+        try:
+            summary = data["summary"]
 
             stats: StatsBar = self.query_one("#stats", StatsBar)
             stats.update_data(summary)
@@ -120,47 +135,40 @@ class ResearchApp(App):
             phase_bar: PhaseStripBar = self.query_one("#phase", PhaseStripBar)
             phase_bar.update_phase(summary.get("phase", "idle"))
 
-            # Frontier
-            graph = self.state.load_graph()
             frontier: FrontierPanel = self.query_one("#frontier", FrontierPanel)
-            frontier.update_data(graph.get("frontier", []))
+            frontier.update_data(data["frontier"])
 
-            # Workers
             workers: WorkerPanel = self.query_one("#workers", WorkerPanel)
             workers.update_data(summary.get("workers", []))
 
-            # Logs
-            events = self.state.tail_log(50)
             log_panel: LogPanel = self.query_one("#log", LogPanel)
-            log_panel.update_data(events)
+            log_panel.update_data(data["events"])
 
-            # Metrics
-            results = self.state.load_results()
             chart: MetricChart = self.query_one("#chart", MetricChart)
-            chart.update_data(results)
+            chart.update_data(data["results"])
+
+            # Show runner crash in log panel
+            if data.get("runner_error"):
+                log_panel.show_error(data["runner_error"])
         except Exception:
-            # Never let a polling error crash the TUI
-            pass
+            logger.debug("poll widget update failed", exc_info=True)
 
     # -- actions ------------------------------------------------------------
 
     def action_pause(self) -> None:
-        """Pause research by setting the paused flag."""
         try:
             self.state.set_paused(True)
         except Exception:
-            pass
+            logger.debug("pause failed", exc_info=True)
 
     def action_resume(self) -> None:
-        """Resume research by clearing the paused flag."""
         try:
             self.state.set_paused(False)
         except Exception:
-            pass
+            logger.debug("resume failed", exc_info=True)
 
     def action_skip(self) -> None:
-        """Request skipping the current experiment."""
         try:
             self.state.set_skip_current(True)
         except Exception:
-            pass
+            logger.debug("skip failed", exc_info=True)

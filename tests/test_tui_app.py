@@ -121,8 +121,8 @@ class TestTUIAppMount:
         state = _make_state(tmp_path)
         app = ResearchApp(repo_path=str(tmp_path), state=state)
         async with app.run_test() as pilot:
-            # Manually trigger poll
-            app._poll_state()
+            # Manually trigger poll (async)
+            await app._poll_state()
 
     @pytest.mark.asyncio
     async def test_poll_with_data(self, tmp_path: Path) -> None:
@@ -151,7 +151,7 @@ class TestTUIAppMount:
 
         app = ResearchApp(repo_path=str(tmp_path), state=state)
         async with app.run_test() as pilot:
-            app._poll_state()
+            await app._poll_state()
             stats: StatsBar = app.query_one("#stats", StatsBar)
             assert "manager" in str(stats.content)
 
@@ -163,7 +163,7 @@ class TestTUIAppMount:
         app = ResearchApp(repo_path=str(tmp_path), state=mock_state)
         async with app.run_test() as pilot:
             # Should not raise
-            app._poll_state()
+            await app._poll_state()
 
 
 # ---------------------------------------------------------------------------
