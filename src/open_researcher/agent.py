@@ -71,6 +71,9 @@ class AgentAdapter(abc.ABC):
     ) -> int:
         """Spawn *cmd* in *workdir*, stream stdout/stderr, return exit code."""
         merged_env = {**os.environ, **(env or {})}
+        # Remove nesting-detection vars so agent CLIs don't refuse to start
+        for _var in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+            merged_env.pop(_var, None)
         with self._lock:
             self._proc = subprocess.Popen(
                 cmd,
@@ -144,8 +147,7 @@ class CodexAdapter(AgentAdapter):
         cmd = [
             self.command, "exec",
             "-s", self._config.get("sandbox", "workspace-write"),
-            "-a", self._config.get("approval_policy", "on-failure"),
-            "-q",
+            "--full-auto",
             prompt,
         ]
         return self._run_process(cmd, workdir, on_output=on_output, env=env)

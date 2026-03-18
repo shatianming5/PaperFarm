@@ -91,7 +91,7 @@ class TestTUIAppInstantiation:
     def test_title(self) -> None:
         mock_state = MagicMock(spec=ResearchState)
         app = ResearchApp(repo_path="/tmp/repo", state=mock_state)
-        assert app.TITLE == "Open Researcher"
+        assert app.TITLE == "PaperFarm"
 
 
 # ---------------------------------------------------------------------------

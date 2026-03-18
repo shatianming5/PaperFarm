@@ -46,7 +46,7 @@ class ResearchApp(App):
     """
 
     CSS_PATH = "styles.css"
-    TITLE = "Open Researcher"
+    TITLE = "PaperFarm"
 
     BINDINGS = [
         Binding("p", "pause", "Pause"),

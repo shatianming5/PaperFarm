@@ -17,8 +17,8 @@ from rich.console import Console
 from rich.table import Table
 
 app = typer.Typer(
-    name="open-researcher",
-    help="Let AI agents run experiments while you sleep.",
+    name="paperfarm",
+    help="Sow ideas, run experiments, harvest better code.",
 )
 console = Console()
 

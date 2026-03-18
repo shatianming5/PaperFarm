@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "open-researcher"
+name = "PaperFarm"
 version = "0.2.0b1"
-description = "Let AI agents run experiments in any repo while you sleep."
+description = "Point it at any repo — sow ideas, run experiments, and harvest better code autonomously."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Open Researcher Contributors" },
+    { name = "PaperFarm Contributors" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -26,7 +26,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Testing",
 ]
-keywords = ["ai", "research", "experiments", "automation", "agent"]
+keywords = ["ai", "research", "experiments", "automation", "agent", "paperfarm"]
 dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
@@ -46,12 +46,12 @@ dev = [
 ]
 
 [project.scripts]
-open-researcher = "open_researcher.cli:app"
+paperfarm = "open_researcher.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/open-researcher/open-researcher"
-Repository = "https://github.com/open-researcher/open-researcher"
-Issues = "https://github.com/open-researcher/open-researcher/issues"
+Homepage = "https://github.com/shatianming5/PaperFarm"
+Repository = "https://github.com/shatianming5/PaperFarm"
+Issues = "https://github.com/shatianming5/PaperFarm/issues"
 
 [tool.ruff]
 target-version = "py310"

@@ -200,9 +200,7 @@ class TestConcreteAdapters:
         assert cmd[1] == "exec"
         assert "-s" in cmd
         assert cmd[cmd.index("-s") + 1] == "read-only"
-        assert "-a" in cmd
-        assert cmd[cmd.index("-a") + 1] == "never"
-        assert "-q" in cmd
+        assert "--full-auto" in cmd
         # prompt is the last positional arg
         assert cmd[-1] == "my prompt"
 
@@ -213,7 +211,7 @@ class TestConcreteAdapters:
         adapter.run(tmp_path, program_file="program.md")
         cmd = mock_run.call_args[0][0]
         assert cmd[cmd.index("-s") + 1] == "workspace-write"
-        assert cmd[cmd.index("-a") + 1] == "on-failure"
+        assert "--full-auto" in cmd
 
     @patch.object(AiderAdapter, "_run_process", return_value=0)
     def test_aider_cmd(self, mock_run, tmp_path: Path):
