@@ -49,3 +49,29 @@ MetricChart {
     height: auto;
     min-height: 8;
 }
+
+/* Review modal screens */
+ReviewScreen, GoalEditScreen, InjectIdeaScreen {
+    align: center middle;
+}
+
+#review-dialog {
+    width: 80;
+    max-height: 30;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+}
+
+#review-title {
+    text-style: bold;
+    width: 100%;
+    content-align: center middle;
+    padding-bottom: 1;
+}
+
+#review-actions {
+    dock: bottom;
+    height: 1;
+    padding-top: 1;
+}
