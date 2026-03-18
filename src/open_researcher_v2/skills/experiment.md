@@ -126,6 +126,12 @@ Resource contract fields may also appear on the row:
 
 Treat those as execution hints from the manager/runtime. Use repo-supported knobs only; do not invent unsupported launchers or scaling schemes.
 
+**Human-injected items:**
+If the claimed frontier item has `selection_reason_code: "human_injected"`
+and no linked `experiment_spec_id`, treat the `description` field as your
+complete task specification. Design the change_plan and evaluation_plan
+yourself based on the description and `.research/evaluation.md`.
+
 If `OPEN_RESEARCHER_SINGLE_GPU_SATURATION=1` is present:
 
 - treat the assigned GPU as exclusive to this run
