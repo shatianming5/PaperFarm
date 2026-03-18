@@ -356,3 +356,125 @@ class TestSkillRunnerSerial:
         # We just verify the log records correct round info.
         log = state.tail_log(200)
         assert any(e.get("round") == 5 for e in log)
+
+
+# ---------------------------------------------------------------------------
+# TestCheckpoints
+# ---------------------------------------------------------------------------
+
+
+class TestCheckpoints:
+    """Tests for human-in-the-loop checkpoint logic."""
+
+    def test_checkpoint_type_returns_none_in_autopilot(self, tmp_path):
+        runner, _, state = _make_runner(tmp_path)
+        assert runner._checkpoint_type("scout", 0) is None
+        assert runner._checkpoint_type("manager", 1) is None
+
+    def test_checkpoint_type_returns_direction_confirm_after_scout(self, tmp_path):
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {"mode": "checkpoint"},
+        })
+        assert runner._checkpoint_type("scout", 0) == "direction_confirm"
+
+    def test_checkpoint_type_returns_hypothesis_review_after_manager(self, tmp_path):
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {"mode": "checkpoint"},
+        })
+        assert runner._checkpoint_type("manager", 1) == "hypothesis_review"
+
+    def test_checkpoint_type_respects_disabled_checkpoint(self, tmp_path):
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {
+                "mode": "checkpoint",
+                "checkpoints": {"after_scout": False},
+            },
+        })
+        assert runner._checkpoint_type("scout", 0) is None
+
+    def test_checkpoint_critic_preflight_vs_postrun(self, tmp_path):
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {"mode": "checkpoint"},
+        })
+        runner._critic_call_count_this_round = 1
+        assert runner._checkpoint_type("critic", 1) == "frontier_review"
+        runner._critic_call_count_this_round = 2
+        assert runner._checkpoint_type("critic", 1) == "result_review"
+
+    def test_await_review_blocks_until_cleared(self, tmp_path):
+        import threading, time
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {"mode": "checkpoint"},
+        })
+        done = threading.Event()
+        def run_await():
+            runner._await_review("hypothesis_review")
+            done.set()
+        t = threading.Thread(target=run_await)
+        t.start()
+        time.sleep(0.5)
+        assert not done.is_set(), "Should still be blocking"
+        state.clear_awaiting_review()
+        done.wait(timeout=3.0)
+        assert done.is_set(), "Should have unblocked"
+        t.join(timeout=1.0)
+
+    def test_await_review_logs_events(self, tmp_path):
+        import threading, time
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {"mode": "checkpoint"},
+        })
+        def run_and_clear():
+            time.sleep(0.3)
+            state.clear_awaiting_review()
+        t = threading.Thread(target=run_and_clear)
+        t.start()
+        runner._await_review("direction_confirm")
+        t.join()
+        logs = state.tail_log(10)
+        events = [e["event"] for e in logs]
+        assert "review_requested" in events
+        assert "review_completed" in events
+
+    def test_await_review_respects_timeout(self, tmp_path):
+        import time
+        runner, _, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {
+                "mode": "checkpoint",
+                "review_timeout_minutes": 0.01,  # ~0.6 seconds
+            },
+        })
+        start = time.monotonic()
+        runner._await_review("hypothesis_review")
+        elapsed = time.monotonic() - start
+        assert elapsed < 5.0, "Should have timed out quickly"
+        logs = state.tail_log(10)
+        events = [e["event"] for e in logs]
+        assert "review_timeout" in events
+
+    def test_run_one_round_triggers_checkpoint(self, tmp_path):
+        import threading, time
+        runner, adapter, state = _make_runner(tmp_path, config_overrides={
+            "interaction": {
+                "mode": "checkpoint",
+                "checkpoints": {
+                    "after_scout": False,
+                    "after_manager": True,
+                    "after_critic_preflight": False,
+                    "after_round": False,
+                },
+            },
+        })
+        def auto_approve():
+            time.sleep(0.5)
+            if state.get_awaiting_review():
+                state.clear_awaiting_review()
+        t = threading.Thread(target=auto_approve)
+        t.start()
+        rc = runner.run_one_round(1)
+        t.join()
+        assert rc == 0
+        logs = state.tail_log(50)
+        review_events = [e for e in logs if e.get("event") == "review_requested"]
+        assert len(review_events) == 1
+        assert review_events[0]["review_type"] == "hypothesis_review"

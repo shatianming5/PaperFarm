@@ -8,6 +8,8 @@ bootstrap (scout) followed by N rounds of manager/critic/experiment steps.
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,6 +60,7 @@ class SkillRunner:
         self.goal = goal
         self.tag = tag
         self.on_output = on_output
+        self._critic_call_count_this_round = 0
 
     # -- paths & loading ----------------------------------------------------
 
@@ -147,6 +150,54 @@ class SkillRunner:
         })
         return rc
 
+    # -- checkpoints -------------------------------------------------------
+
+    def _checkpoint_type(self, step_name: str, round_num: int) -> str | None:
+        """Return the review type for a checkpoint, or None if no review needed."""
+        config = self.state.load_config()
+        interaction = config.get("interaction", {})
+        mode = interaction.get("mode", "autopilot")
+
+        if mode != "checkpoint":
+            return None
+
+        checkpoints = interaction.get("checkpoints", {})
+
+        if step_name == "scout" and checkpoints.get("after_scout", True):
+            return "direction_confirm"
+        if step_name == "manager" and checkpoints.get("after_manager", True):
+            return "hypothesis_review"
+        if step_name == "critic":
+            if self._critic_call_count_this_round == 1 and checkpoints.get("after_critic_preflight", True):
+                return "frontier_review"
+            if self._critic_call_count_this_round == 2 and checkpoints.get("after_round", True):
+                return "result_review"
+        return None
+
+    def _await_review(self, review_type: str) -> None:
+        """Block until TUI/CLI clears awaiting_review or timeout expires."""
+        self.state.set_awaiting_review({
+            "type": review_type,
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+        })
+        self.state.append_log({"event": "review_requested", "review_type": review_type})
+
+        config = self.state.load_config()
+        timeout = config.get("interaction", {}).get("review_timeout_minutes", 0)
+        deadline = time.monotonic() + timeout * 60 if timeout > 0 else None
+
+        while True:
+            if self.state.get_awaiting_review() is None:
+                self.state.append_log({"event": "review_completed", "review_type": review_type})
+                break
+            if self.state.is_paused():
+                break
+            if deadline and time.monotonic() > deadline:
+                self.state.clear_awaiting_review()
+                self.state.append_log({"event": "review_timeout", "review_type": review_type})
+                break
+            time.sleep(1.0)
+
     # -- bootstrap ----------------------------------------------------------
 
     def run_bootstrap(self) -> int:
@@ -164,6 +215,9 @@ class SkillRunner:
             if rc != 0:
                 logger.warning("Bootstrap step %r failed with rc=%d", step_name, rc)
                 return rc
+            review_type = self._checkpoint_type(step_name, 0)
+            if review_type:
+                self._await_review(review_type)
         return 0
 
     # -- single round -------------------------------------------------------
@@ -179,44 +233,35 @@ class SkillRunner:
         protocol = self._load_protocol()
         loop_steps = protocol.get("loop", [])
 
+        self._critic_call_count_this_round = 0
         self.state.update_phase("round", round_num)
-        self.state.append_log({
-            "event": "round_started",
-            "round": round_num,
-        })
+        self.state.append_log({"event": "round_started", "round": round_num})
 
         for step_def in loop_steps:
-            # Check for pause
             if self.state.is_paused():
-                self.state.append_log({
-                    "event": "round_paused",
-                    "round": round_num,
-                })
-                return -2  # paused
+                self.state.append_log({"event": "round_paused", "round": round_num})
+                return -2
 
-            # Check for skip
             if self.state.consume_skip():
-                self.state.append_log({
-                    "event": "round_skipped",
-                    "round": round_num,
-                })
-                return -1  # skipped
+                self.state.append_log({"event": "round_skipped", "round": round_num})
+                return -1
 
             step_name = step_def["name"]
             skill_file = step_def["skill"]
 
             rc = self._run_skill(step_name, skill_file)
             if rc != 0:
-                logger.warning(
-                    "Round %d step %r failed with rc=%d",
-                    round_num, step_name, rc,
-                )
+                logger.warning("Round %d step %r failed with rc=%d", round_num, step_name, rc)
                 return rc
 
-        self.state.append_log({
-            "event": "round_completed",
-            "round": round_num,
-        })
+            if step_name == "critic":
+                self._critic_call_count_this_round += 1
+
+            review_type = self._checkpoint_type(step_name, round_num)
+            if review_type:
+                self._await_review(review_type)
+
+        self.state.append_log({"event": "round_completed", "round": round_num})
         return 0
 
     # -- serial loop --------------------------------------------------------
