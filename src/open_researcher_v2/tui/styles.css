@@ -1,14 +1,10 @@
 /* Open-Researcher v2 TUI layout */
 
 Screen {
-    layout: grid;
-    grid-size: 2 3;
-    grid-rows: auto auto 1fr;
-    grid-columns: 1fr 1fr;
+    layout: vertical;
 }
 
 StatsBar {
-    column-span: 2;
     height: 1;
     background: $surface;
     color: $text;
@@ -16,25 +12,34 @@ StatsBar {
 }
 
 PhaseStripBar {
-    column-span: 2;
     height: 1;
     background: $surface-darken-1;
     color: $text-muted;
     padding: 0 1;
 }
 
+TabbedContent {
+    height: 1fr;
+}
+
+/* Execution tab: frontier + workers side by side */
+#tab-exec Horizontal {
+    height: 100%;
+}
+
 FrontierPanel {
+    width: 1fr;
     height: 100%;
     border: solid $primary-background;
 }
 
 WorkerPanel {
+    width: 1fr;
     height: 100%;
     border: solid $primary-background;
 }
 
 LogPanel {
-    column-span: 2;
     height: 100%;
     min-height: 6;
     border: solid $primary-background;
