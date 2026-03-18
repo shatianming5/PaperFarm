@@ -7,7 +7,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from open_researcher_v2.cli import app, _auto_tag
+from open_researcher_v2.cli import app, _auto_tag, _deploy_scripts
 
 runner = CliRunner()
 
@@ -146,3 +146,37 @@ class TestRunCommand:
         assert "--workers" in result.output
         assert "--headless" in result.output
         assert "--agent-name" in result.output
+
+
+# ---------------------------------------------------------------------------
+# script deployment
+# ---------------------------------------------------------------------------
+
+
+class TestScriptDeployment:
+    """Tests for _deploy_scripts helper."""
+
+    def test_deploys_record_py(self, tmp_path):
+        research_dir = tmp_path / ".research"
+        research_dir.mkdir()
+        _deploy_scripts(research_dir)
+        record = research_dir / "scripts" / "record.py"
+        assert record.exists()
+        assert "argparse" in record.read_text()
+
+    def test_deploys_rollback_sh(self, tmp_path):
+        import stat
+
+        research_dir = tmp_path / ".research"
+        research_dir.mkdir()
+        _deploy_scripts(research_dir)
+        rollback = research_dir / "scripts" / "rollback.sh"
+        assert rollback.exists()
+        assert rollback.stat().st_mode & stat.S_IXUSR
+
+    def test_idempotent(self, tmp_path):
+        research_dir = tmp_path / ".research"
+        research_dir.mkdir()
+        _deploy_scripts(research_dir)
+        _deploy_scripts(research_dir)  # second call should not fail
+        assert (research_dir / "scripts" / "record.py").exists()
