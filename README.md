@@ -297,6 +297,42 @@ The interactive TUI is a **research command center** built around the runtime st
 <p align="center"><em>Completed</em>: all phases checked off, final frontier state with best metric displayed.</p>
 
 <details>
+<summary><b>🖼️ More Screenshots</b></summary>
+<br/>
+
+<p align="center">
+  <img src="imgs/tui-08_result_review.png" alt="Result review modal" width="100%" />
+</p>
+<p align="center"><em>Result Review</em>: override AI keep/discard decisions and add constraints for the next round.</p>
+
+<p align="center">
+  <img src="imgs/tui-09_inject.png" alt="Inject experiment modal" width="100%" />
+</p>
+<p align="center"><em>Inject Experiment</em>: add a human-authored idea to the frontier with priority.</p>
+
+<p align="center">
+  <img src="imgs/tui-10_goal_edit.png" alt="Goal edit modal" width="100%" />
+</p>
+<p align="center"><em>Edit Goal</em>: update research constraints and direction mid-run.</p>
+
+<p align="center">
+  <img src="imgs/tui-12_stress.png" alt="Stress test — 10 rounds, 6 workers" width="100%" />
+</p>
+<p align="center"><em>Stress Test</em>: 10 rounds, 30+ frontier items, 6 parallel workers — scales smoothly.</p>
+
+<p align="center">
+  <img src="imgs/tui-14_idle.png" alt="Idle initial state" width="100%" />
+</p>
+<p align="center"><em>Idle</em>: clean initial state before any research round starts.</p>
+
+<p align="center">
+  <img src="imgs/tui-15_failed.png" alt="Failed state" width="100%" />
+</p>
+<p align="center"><em>Failed</em>: bold red indicator when the research loop encounters an unrecoverable error.</p>
+
+</details>
+
+<details>
 <summary><b>📑 3 Tabs & Keyboard Shortcuts</b></summary>
 <br/>
 
