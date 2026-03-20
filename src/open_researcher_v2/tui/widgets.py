@@ -233,9 +233,19 @@ class LogPanel(Vertical):
 
 
 class MetricChart(Vertical):
-    """Metrics panel with summary stats, trend chart, and results table."""
+    """Metrics panel with per-metric sparkline line charts and results table."""
 
     BORDER_TITLE = "Metrics"
+
+    _COLORS = ["cyan", "green", "yellow", "magenta", "blue"]
+
+    # Braille dot positions within a cell (row, col) → bit
+    _DOT_MAP = [
+        [0x01, 0x08],
+        [0x02, 0x10],
+        [0x04, 0x20],
+        [0x40, 0x80],
+    ]
 
     def compose(self):  # type: ignore[override]
         yield Static(id="metric-summary")
@@ -252,41 +262,48 @@ class MetricChart(Vertical):
         kept = [r for r in results if r.get("status") == "keep"]
         discarded = [r for r in results if r.get("status") == "discard"]
 
-        # Extract numeric values from kept results
-        values: list[float] = []
+        # Group kept results by metric name (preserve insertion order)
+        metric_data: dict[str, list[float]] = {}
         for r in kept:
+            metric = r.get("metric", "") or "value"
             try:
-                values.append(float(r["value"]))
+                v = float(r["value"])
             except (ValueError, KeyError, TypeError):
                 continue
+            metric_data.setdefault(metric, []).append(v)
 
-        # -- Summary line --
-        if not values:
+        if not metric_data:
             summary_w.update("[dim]No kept results yet.[/]")
             chart_w.update("")
             table_w.clear()
             return
 
-        best = max(values)
-        worst = min(values)
-        latest = values[-1]
-        mean = sum(values) / len(values)
-        if len(values) >= 2:
-            trend = "\u2191" if values[-1] > values[-2] else "\u2193" if values[-1] < values[-2] else "\u2192"
+        # -- Summary line --
+        n_metrics = len(metric_data)
+        if n_metrics == 1:
+            name, vals = next(iter(metric_data.items()))
+            best = max(vals)
+            latest = vals[-1]
+            mean = sum(vals) / len(vals)
+            trend = self._trend_arrow(vals)
+            summary_w.update(
+                f" [dim]Kept: [/][bold]{len(kept)} [/]"
+                f"[dim]Disc: [/]{len(discarded)} "
+                f"[dim]\u2502 [/]"
+                f"[dim]Best: [/][bold cyan]{best:.4f} [/]"
+                f"[dim]Mean: [/]{mean:.4f} "
+                f"[dim]Latest: [/][bold]{latest:.4f}[/]{trend}"
+            )
         else:
-            trend = "\u2192"
+            summary_w.update(
+                f" [dim]Kept: [/][bold]{len(kept)} [/]"
+                f"[dim]Disc: [/]{len(discarded)} "
+                f"[dim]\u2502 [/]"
+                f"[dim]{n_metrics} metrics tracked[/]"
+            )
 
-        summary_w.update(
-            f" [dim]Kept:[/][bold]{len(kept)}[/] "
-            f"[dim]Disc:[/]{len(discarded)} "
-            f"[dim]\u2502[/] "
-            f"[dim]Best:[/][bold cyan]{best:.4f}[/] "
-            f"[dim]Mean:[/]{mean:.4f} "
-            f"[dim]Latest:[/][bold]{latest:.4f}[/]{trend}"
-        )
-
-        # -- Chart --
-        self._render_chart(chart_w, values)
+        # -- Sparkline charts --
+        self._render_sparklines(chart_w, metric_data)
 
         # -- Results table (most recent first, up to 20 rows) --
         table_w.clear()
@@ -305,80 +322,86 @@ class MetricChart(Vertical):
                 str(r.get("description", ""))[:40],
             )
 
-    # Gradient styles for chart rows (top=bright, bottom=dim)
-    _CHART_STYLES = [
-        "bold bright_cyan",   # row near peak — brightest
-        "bold cyan",
-        "cyan",
-        "dark_cyan",
-    ]
-
     @staticmethod
-    def _render_chart(widget: Static, values: list[float]) -> None:
-        """Render a smooth braille area chart with gradient fill.
+    def _trend_arrow(vals: list[float]) -> str:
+        if len(vals) < 2:
+            return "\u2192"
+        return "\u2191" if vals[-1] > vals[-2] else "\u2193" if vals[-1] < vals[-2] else "\u2192"
 
-        Uses Unicode braille characters (U+2800-U+28FF) which provide
-        2×4 pixel resolution per character cell, producing smooth curves
-        with a gradient that fades from bright cyan at the line to dim
-        blue at the bottom.
-        """
-        if not values:
-            widget.update("")
-            return
+    def _render_sparklines(self, widget: Static, metric_data: dict[str, list[float]]) -> None:
+        """Render stacked sparkline line charts, one per metric."""
+        n_metrics = len(metric_data)
+        max_n = max(len(vs) for vs in metric_data.values())
+        chart_cols = min(80, max(20, max_n * 2))
 
+        # Allocate chart rows per metric
+        if n_metrics == 1:
+            rows_per = 8
+        elif n_metrics == 2:
+            rows_per = 5
+        elif n_metrics <= 4:
+            rows_per = 4
+        else:
+            rows_per = 3
+
+        colors = self._COLORS
+        lines: list[str] = []
+
+        for i, (name, values) in enumerate(metric_data.items()):
+            color = colors[i % len(colors)]
+            best = max(values)
+            latest = values[-1]
+            mean = sum(values) / len(values)
+            trend = self._trend_arrow(values)
+
+            # Metric header — trailing spaces INSIDE [/] to avoid Textual eating them
+            lines.append(
+                f" [{color}]\u25cf {name}  [/]"
+                f"best: [{color} bold]{best:.4f}  [/]"
+                f"latest: [bold]{latest:.4f}[/]{trend}"
+                f"  [dim]mean: {mean:.4f}  n={len(values)}[/]"
+            )
+
+            if len(values) < 2:
+                lines.append(f"   [dim]Single point: {values[0]:.4f}[/]")
+            else:
+                chart_lines = self._render_line(values, chart_cols, rows_per, color)
+                lines.extend(chart_lines)
+
+            # Separator between metrics
+            if i < n_metrics - 1:
+                lines.append("")
+
+        widget.update("\n".join(lines))
+
+    @classmethod
+    def _render_line(cls, values: list[float], chart_cols: int,
+                     chart_rows: int, color: str) -> list[str]:
+        """Render a single braille line chart (line only, no area fill)."""
         vmin, vmax = min(values), max(values)
         vrange = vmax - vmin
 
-        # Chart dimensions in character cells
-        chart_cols = min(80, max(30, len(values) * 3))
-        chart_rows = 10
-
+        # Add 5% padding so line doesn't touch edges
         if vrange < 1e-9:
-            # Flat data — show a mid-height horizontal band
-            label = f"{vmin:.4f}"
-            lines: list[str] = []
-            mid = chart_rows // 2
-            bar = chr(0x2800 | 0x01 | 0x02 | 0x08 | 0x10)  # ⠓ top two rows filled
-            for crow in range(chart_rows):
-                if crow == 0:
-                    y_label = label
-                elif crow == chart_rows - 1:
-                    y_label = label
-                else:
-                    y_label = ""
-                prefix = f"[dim]{y_label:>8} \u2502[/]"
-                if crow == mid:
-                    lines.append(f"{prefix}[bold cyan]{bar * chart_cols}[/]")
-                elif crow == mid - 1 or crow == mid + 1:
-                    fill = chr(0x2800 | 0x40 | 0x80) if crow == mid - 1 else chr(0x2800 | 0x01 | 0x08)
-                    lines.append(f"{prefix}[dim cyan]{fill * chart_cols}[/]")
-                else:
-                    lines.append(f"{prefix}{chr(0x2800) * chart_cols}")
-            lines.append(f"[dim]{' ' * 9}\u2514{'─' * chart_cols}[/]")
-            widget.update("\n".join(lines))
-            return
+            vrange = max(abs(vmin) * 0.1, 0.01)
+            vmin -= vrange / 2
+            vmax += vrange / 2
+            vrange = vmax - vmin
+        else:
+            pad = vrange * 0.05
+            vmin -= pad
+            vmax += pad
+            vrange = vmax - vmin
 
-        # Pixel dimensions (braille: 2 dots wide × 4 dots tall per cell)
         px_w = chart_cols * 2
         px_h = chart_rows * 4
-
-        # Braille dot positions within a cell:
-        # Col 0: rows 0-3 → bits 0,1,2,6
-        # Col 1: rows 0-3 → bits 3,4,5,7
-        _DOT_MAP = [
-            [0x01, 0x08],
-            [0x02, 0x10],
-            [0x04, 0x20],
-            [0x40, 0x80],
-        ]
-
-        # Build pixel grid + track the line position per column
         grid = [[False] * px_w for _ in range(px_h)]
-        line_y = [0] * px_w  # track line height for gradient coloring
 
         n = len(values)
+        prev_py: int | None = None
+
         for px_x in range(px_w):
-            # Map pixel x to data index (fractional)
+            # Interpolate data value
             data_x = px_x / max(1, px_w - 1) * (n - 1)
             idx = int(data_x)
             frac = data_x - idx
@@ -387,36 +410,38 @@ class MetricChart(Vertical):
             else:
                 v = values[idx] * (1 - frac) + values[idx + 1] * frac
 
-            # Map value to pixel y (0 = bottom, px_h-1 = top)
+            # Map to pixel Y (0 = bottom, px_h-1 = top)
             py = int((v - vmin) / vrange * (px_h - 1) + 0.5)
             py = max(0, min(px_h - 1, py))
-            line_y[px_x] = py
 
-            # Fill area: from bottom (0) to the line point
-            for y in range(py + 1):
-                grid[y][px_x] = True
+            # Draw line point
+            grid[py][px_x] = True
 
-            # Thicken the line slightly (1 extra pixel above)
-            if py + 1 < px_h:
-                grid[py + 1][px_x] = True
+            # Connect to previous point to avoid gaps
+            if prev_py is not None and abs(py - prev_py) > 1:
+                lo, hi = min(prev_py, py), max(prev_py, py)
+                for y in range(lo, hi + 1):
+                    grid[y][px_x] = True
 
-        # Convert grid to braille characters with gradient coloring
-        # Grid y=0 is bottom; chart row 0 renders the TOP of the chart
-        y_labels = {0: vmax, chart_rows // 2: (vmin + vmax) / 2, chart_rows - 1: vmin}
-        styles = MetricChart._CHART_STYLES
+            prev_py = py
 
-        lines = []
+        # Thicken line by 1 pixel upward for visibility
+        for px_x in range(px_w):
+            for py in range(px_h - 2, -1, -1):
+                if grid[py][px_x] and py + 1 < px_h:
+                    grid[py + 1][px_x] = True
+
+        # Convert grid to braille characters
+        y_labels = {0: vmax, chart_rows - 1: vmin}
+        dot_map = cls._DOT_MAP
+
+        lines: list[str] = []
         for crow in range(chart_rows):
-            # Y-axis label
-            if crow in y_labels:
-                label = f"{y_labels[crow]:.4f}"
-            else:
-                label = ""
-            parts = [f"[dim]{label:>8} \u2502[/]"]
+            label = f"{y_labels[crow]:.4f}" if crow in y_labels else ""
+            axis_ch = "\u2524" if crow in y_labels else "\u2502"
 
-            # Build braille characters for this row
             row_chars: list[str] = []
-            row_has_dots = False
+            has_dots = False
             for ccol in range(chart_cols):
                 code = 0x2800
                 for dy in range(4):
@@ -424,53 +449,32 @@ class MetricChart(Vertical):
                         gy = px_h - 1 - (crow * 4 + dy)
                         gx = ccol * 2 + dx
                         if 0 <= gy < px_h and 0 <= gx < px_w and grid[gy][gx]:
-                            code |= _DOT_MAP[dy][dx]
+                            code |= dot_map[dy][dx]
                 row_chars.append(chr(code))
                 if code != 0x2800:
-                    row_has_dots = True
+                    has_dots = True
 
-            braille_str = "".join(row_chars)
-            if not row_has_dots:
-                parts.append(braille_str)
+            braille = "".join(row_chars)
+            prefix = f"[dim]{label:>8}{axis_ch}[/]"
+            if has_dots:
+                lines.append(f"{prefix}[{color}]{braille}[/]")
             else:
-                # Determine gradient color based on row position relative to data
-                # Find the average line height in character rows
-                avg_line_crow = chart_rows - 1 - (sum(line_y) / len(line_y)) / 4
-                dist = crow - avg_line_crow  # positive = below line
-                if dist <= 0:
-                    style = styles[0]  # at or above line: brightest
-                elif dist < len(styles):
-                    style = styles[int(dist)]
-                else:
-                    style = styles[-1]  # deep fill: dimmest
-                parts.append(f"[{style}]{braille_str}[/]")
+                lines.append(f"{prefix}{braille}")
 
-            lines.append("".join(parts))
+        # X-axis
+        lines.append(f"[dim]{' ' * 8}\u2514{'─' * chart_cols}[/]")
 
-        # X-axis line
-        lines.append(f"[dim]{' ' * 9}\u2514{'─' * chart_cols}[/]")
-
-        # X-axis labels (evenly spaced)
+        # X-axis labels
         num_labels = min(n, max(3, chart_cols // 8))
-        label_data_idxs: list[int] = []
-        for i in range(num_labels):
-            label_data_idxs.append(round(i / max(1, num_labels - 1) * (n - 1)))
-
-        # Map data indices to chart columns
-        label_slots: list[tuple[int, str]] = []
-        for di in label_data_idxs:
-            col = round(di / max(1, n - 1) * (chart_cols - 1)) if n > 1 else 0
-            label_slots.append((col, str(di + 1)))
-
-        # Render x-axis avoiding overlaps
         x_line = [" "] * (chart_cols + 5)
-        for col, text in label_slots:
-            start = col
-            if start + len(text) <= len(x_line):
-                # Check for overlap
-                if all(x_line[start + j] == " " for j in range(len(text))):
+        for i in range(num_labels):
+            di = round(i / max(1, num_labels - 1) * (n - 1))
+            col = round(di / max(1, n - 1) * (chart_cols - 1)) if n > 1 else 0
+            text = str(di + 1)
+            if col + len(text) <= len(x_line):
+                if all(x_line[col + j] == " " for j in range(len(text))):
                     for j, ch in enumerate(text):
-                        x_line[start + j] = ch
+                        x_line[col + j] = ch
         lines.append(f"[dim]{' ' * 9}{''.join(x_line).rstrip()}[/]")
 
-        widget.update("\n".join(lines))
+        return lines
