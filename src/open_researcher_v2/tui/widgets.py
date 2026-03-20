@@ -305,78 +305,172 @@ class MetricChart(Vertical):
                 str(r.get("description", ""))[:40],
             )
 
+    # Gradient styles for chart rows (top=bright, bottom=dim)
+    _CHART_STYLES = [
+        "bold bright_cyan",   # row near peak — brightest
+        "bold cyan",
+        "cyan",
+        "dark_cyan",
+    ]
+
     @staticmethod
     def _render_chart(widget: Static, values: list[float]) -> None:
-        """Render a Unicode block chart into the given Static widget."""
+        """Render a smooth braille area chart with gradient fill.
+
+        Uses Unicode braille characters (U+2800-U+28FF) which provide
+        2×4 pixel resolution per character cell, producing smooth curves
+        with a gradient that fades from bright cyan at the line to dim
+        blue at the bottom.
+        """
         if not values:
             widget.update("")
             return
 
-        _BLOCKS = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
-        rows = 8
         vmin, vmax = min(values), max(values)
         vrange = vmax - vmin
+
+        # Chart dimensions in character cells
+        chart_cols = min(80, max(30, len(values) * 3))
+        chart_rows = 10
+
         if vrange < 1e-9:
-            # Flat data — show a single mid-height bar
-            widget.update(
-                f"[dim]  {vmin:.4f} [/][dim]\u2502[/]"
-                f"[cyan]{'\u2584' * min(len(values) * 2, 80)}[/]"
-            )
+            # Flat data — show a mid-height horizontal band
+            label = f"{vmin:.4f}"
+            lines: list[str] = []
+            mid = chart_rows // 2
+            bar = chr(0x2800 | 0x01 | 0x02 | 0x08 | 0x10)  # ⠓ top two rows filled
+            for crow in range(chart_rows):
+                if crow == 0:
+                    y_label = label
+                elif crow == chart_rows - 1:
+                    y_label = label
+                else:
+                    y_label = ""
+                prefix = f"[dim]{y_label:>8} \u2502[/]"
+                if crow == mid:
+                    lines.append(f"{prefix}[bold cyan]{bar * chart_cols}[/]")
+                elif crow == mid - 1 or crow == mid + 1:
+                    fill = chr(0x2800 | 0x40 | 0x80) if crow == mid - 1 else chr(0x2800 | 0x01 | 0x08)
+                    lines.append(f"{prefix}[dim cyan]{fill * chart_cols}[/]")
+                else:
+                    lines.append(f"{prefix}{chr(0x2800) * chart_cols}")
+            lines.append(f"[dim]{' ' * 9}\u2514{'─' * chart_cols}[/]")
+            widget.update("\n".join(lines))
             return
 
-        n = len(values)
-        # Bar width: aim for ~100 chars total chart area
-        bar_w = max(1, min(6, 100 // n))
+        # Pixel dimensions (braille: 2 dots wide × 4 dots tall per cell)
+        px_w = chart_cols * 2
+        px_h = chart_rows * 4
 
-        # Y-axis labels: show at top, middle, bottom rows
-        y_positions = {rows - 1: vmax, rows // 2: (vmin + vmax) / 2, 0: vmin}
+        # Braille dot positions within a cell:
+        # Col 0: rows 0-3 → bits 0,1,2,6
+        # Col 1: rows 0-3 → bits 3,4,5,7
+        _DOT_MAP = [
+            [0x01, 0x08],
+            [0x02, 0x10],
+            [0x04, 0x20],
+            [0x40, 0x80],
+        ]
+
+        # Build pixel grid + track the line position per column
+        grid = [[False] * px_w for _ in range(px_h)]
+        line_y = [0] * px_w  # track line height for gradient coloring
+
+        n = len(values)
+        for px_x in range(px_w):
+            # Map pixel x to data index (fractional)
+            data_x = px_x / max(1, px_w - 1) * (n - 1)
+            idx = int(data_x)
+            frac = data_x - idx
+            if idx >= n - 1:
+                v = values[-1]
+            else:
+                v = values[idx] * (1 - frac) + values[idx + 1] * frac
+
+            # Map value to pixel y (0 = bottom, px_h-1 = top)
+            py = int((v - vmin) / vrange * (px_h - 1) + 0.5)
+            py = max(0, min(px_h - 1, py))
+            line_y[px_x] = py
+
+            # Fill area: from bottom (0) to the line point
+            for y in range(py + 1):
+                grid[y][px_x] = True
+
+            # Thicken the line slightly (1 extra pixel above)
+            if py + 1 < px_h:
+                grid[py + 1][px_x] = True
+
+        # Convert grid to braille characters with gradient coloring
+        # Grid y=0 is bottom; chart row 0 renders the TOP of the chart
+        y_labels = {0: vmax, chart_rows // 2: (vmin + vmax) / 2, chart_rows - 1: vmin}
+        styles = MetricChart._CHART_STYLES
 
         lines = []
-        for row in range(rows - 1, -1, -1):
+        for crow in range(chart_rows):
             # Y-axis label
-            if row in y_positions:
-                label = f"{y_positions[row]:.4f}"
+            if crow in y_labels:
+                label = f"{y_labels[crow]:.4f}"
             else:
                 label = ""
-            parts = [f"[dim]{label:>7} \u2502[/]"]
+            parts = [f"[dim]{label:>8} \u2502[/]"]
 
-            for v in values:
-                normalized = (v - vmin) / vrange * rows * 8
-                row_fill = normalized - row * 8
-                if row_fill >= 8:
-                    ch = _BLOCKS[8]
-                elif row_fill >= 1:
-                    ch = _BLOCKS[int(row_fill)]
-                elif row_fill > 0:
-                    ch = _BLOCKS[1]
+            # Build braille characters for this row
+            row_chars: list[str] = []
+            row_has_dots = False
+            for ccol in range(chart_cols):
+                code = 0x2800
+                for dy in range(4):
+                    for dx in range(2):
+                        gy = px_h - 1 - (crow * 4 + dy)
+                        gx = ccol * 2 + dx
+                        if 0 <= gy < px_h and 0 <= gx < px_w and grid[gy][gx]:
+                            code |= _DOT_MAP[dy][dx]
+                row_chars.append(chr(code))
+                if code != 0x2800:
+                    row_has_dots = True
+
+            braille_str = "".join(row_chars)
+            if not row_has_dots:
+                parts.append(braille_str)
+            else:
+                # Determine gradient color based on row position relative to data
+                # Find the average line height in character rows
+                avg_line_crow = chart_rows - 1 - (sum(line_y) / len(line_y)) / 4
+                dist = crow - avg_line_crow  # positive = below line
+                if dist <= 0:
+                    style = styles[0]  # at or above line: brightest
+                elif dist < len(styles):
+                    style = styles[int(dist)]
                 else:
-                    ch = " "
-                if ch != " ":
-                    parts.append(f"[cyan]{ch * bar_w}[/]")
-                else:
-                    parts.append(" " * bar_w)
+                    style = styles[-1]  # deep fill: dimmest
+                parts.append(f"[{style}]{braille_str}[/]")
 
             lines.append("".join(parts))
 
         # X-axis line
-        chart_w = bar_w * n
-        lines.append(f"[dim]{' ' * 8}\u2514{'─' * chart_w}[/]")
+        lines.append(f"[dim]{' ' * 9}\u2514{'─' * chart_cols}[/]")
 
-        # X-axis labels (sparse to avoid crowding)
-        if n <= 20:
-            step = 1
-        elif n <= 50:
-            step = max(1, n // 15)
-        else:
-            step = max(1, n // 10)
+        # X-axis labels (evenly spaced)
+        num_labels = min(n, max(3, chart_cols // 8))
+        label_data_idxs: list[int] = []
+        for i in range(num_labels):
+            label_data_idxs.append(round(i / max(1, num_labels - 1) * (n - 1)))
 
-        x_parts = [" " * 9]
-        for i in range(n):
-            num = i + 1
-            if num == 1 or num == n or num % step == 0:
-                x_parts.append(f"[dim]{str(num).center(bar_w)}[/]")
-            else:
-                x_parts.append(" " * bar_w)
-        lines.append("".join(x_parts))
+        # Map data indices to chart columns
+        label_slots: list[tuple[int, str]] = []
+        for di in label_data_idxs:
+            col = round(di / max(1, n - 1) * (chart_cols - 1)) if n > 1 else 0
+            label_slots.append((col, str(di + 1)))
+
+        # Render x-axis avoiding overlaps
+        x_line = [" "] * (chart_cols + 5)
+        for col, text in label_slots:
+            start = col
+            if start + len(text) <= len(x_line):
+                # Check for overlap
+                if all(x_line[start + j] == " " for j in range(len(text))):
+                    for j, ch in enumerate(text):
+                        x_line[start + j] = ch
+        lines.append(f"[dim]{' ' * 9}{''.join(x_line).rstrip()}[/]")
 
         widget.update("\n".join(lines))
