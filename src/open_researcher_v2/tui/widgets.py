@@ -245,9 +245,7 @@ class MetricChart(Vertical):
     def compose(self):  # type: ignore[override]
         yield Static(id="metric-summary")
         yield Static(id="metric-chart")
-        table = DataTable(id="metric-results")
-        table.add_columns("#", "Frontier", "Status", "Metric", "Value", "Worker", "Desc")
-        yield table
+        yield DataTable(id="metric-results")
 
     def update_data(self, results: list[dict[str, Any]]) -> None:
         summary_w: Static = self.query_one("#metric-summary", Static)
@@ -270,7 +268,7 @@ class MetricChart(Vertical):
         if not metric_data:
             summary_w.update("[dim]No kept results yet.[/]")
             chart_w.update("")
-            table_w.clear()
+            table_w.clear(columns=True)
             return
 
         # -- Summary line --
@@ -300,21 +298,74 @@ class MetricChart(Vertical):
         # -- Sparkline charts --
         self._render_sparklines(chart_w, metric_data)
 
-        # -- Results table (most recent first, up to 20 rows) --
-        table_w.clear()
-        recent = list(reversed(results[-20:]))
-        for i, r in enumerate(recent):
-            idx = len(results) - i
-            status = str(r.get("status", ""))
+        # -- Results table: pivot so each experiment is one row --
+        self._update_table(table_w, results, list(metric_data.keys()))
+
+    @staticmethod
+    def _update_table(
+        table_w: DataTable,
+        results: list[dict[str, Any]],
+        metric_names: list[str],
+    ) -> None:
+        """Rebuild table with one column per metric (pivot view)."""
+        table_w.clear(columns=True)
+
+        if len(metric_names) <= 1:
+            # Single metric or unknown — simple flat table
+            table_w.add_columns("#", "Frontier", "Status", "Value", "Worker", "Desc")
+            recent = list(reversed(results[-20:]))
+            for i, r in enumerate(recent):
+                idx = len(results) - i
+                status = str(r.get("status", ""))
+                style = _STATUS_STYLES.get(status, "white")
+                table_w.add_row(
+                    str(idx),
+                    str(r.get("frontier_id", "")),
+                    Text(status, style=style),
+                    str(r.get("value", "")),
+                    str(r.get("worker", "")),
+                    str(r.get("description", ""))[:40],
+                )
+            return
+
+        # Multi-metric: pivot — group by frontier_id, one column per metric
+        table_w.add_columns("#", "Frontier", "Status", *metric_names, "Worker", "Desc")
+
+        # Build pivot: frontier_id → {metric: value, ...}
+        pivoted: dict[str, dict[str, str]] = {}
+        row_info: dict[str, dict[str, str]] = {}  # frontier_id → status/worker/desc
+        order: list[str] = []  # insertion order of frontier_ids
+
+        for r in results:
+            fid = r.get("frontier_id", "")
+            metric = r.get("metric", "") or "value"
+            if fid not in pivoted:
+                pivoted[fid] = {}
+                order.append(fid)
+                row_info[fid] = {
+                    "status": str(r.get("status", "")),
+                    "worker": str(r.get("worker", "")),
+                    "desc": str(r.get("description", ""))[:40],
+                }
+            pivoted[fid][metric] = str(r.get("value", ""))
+            # Update status to latest
+            row_info[fid]["status"] = str(r.get("status", ""))
+
+        # Show most recent first, up to 20
+        recent_ids = list(reversed(order[-20:]))
+        for i, fid in enumerate(recent_ids):
+            idx = len(order) - i
+            info = row_info[fid]
+            status = info["status"]
             style = _STATUS_STYLES.get(status, "white")
+            metric_vals = [pivoted[fid].get(m, "") for m in metric_names]
             table_w.add_row(
                 str(idx),
-                str(r.get("frontier_id", "")),
+                fid,
                 Text(status, style=style),
-                str(r.get("metric", "")),
-                str(r.get("value", "")),
-                str(r.get("worker", "")),
-                str(r.get("description", ""))[:40],
+                *metric_vals,
+                info["worker"],
+                info["desc"],
             )
 
     @staticmethod
