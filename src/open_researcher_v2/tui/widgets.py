@@ -233,19 +233,14 @@ class LogPanel(Vertical):
 
 
 class MetricChart(Vertical):
-    """Metrics panel with per-metric sparkline line charts and results table."""
+    """Metrics panel with per-metric sparkline area charts and results table."""
 
     BORDER_TITLE = "Metrics"
 
-    _COLORS = ["cyan", "green", "yellow", "magenta", "blue"]
-
-    # Braille dot positions within a cell (row, col) → bit
-    _DOT_MAP = [
-        [0x01, 0x08],
-        [0x02, 0x10],
-        [0x04, 0x20],
-        [0x40, 0x80],
-    ]
+    # Bright line colors
+    _COLORS = ["#00d7ff", "#00ff87", "#ffd700", "#d787ff", "#5fafff"]
+    # Dark fill colors (same hue, much darker for area below curve)
+    _COLORS_DIM = ["#004050", "#003820", "#403800", "#301848", "#183050"]
 
     def compose(self):  # type: ignore[override]
         yield Static(id="metric-summary")
@@ -329,10 +324,9 @@ class MetricChart(Vertical):
         return "\u2191" if vals[-1] > vals[-2] else "\u2193" if vals[-1] < vals[-2] else "\u2192"
 
     def _render_sparklines(self, widget: Static, metric_data: dict[str, list[float]]) -> None:
-        """Render stacked sparkline line charts, one per metric."""
+        """Render stacked sparkline area charts, one per metric."""
         n_metrics = len(metric_data)
-        max_n = max(len(vs) for vs in metric_data.values())
-        chart_cols = min(80, max(20, max_n * 2))
+        chart_cols = 90
 
         # Allocate chart rows per metric
         if n_metrics == 1:
@@ -345,43 +339,65 @@ class MetricChart(Vertical):
             rows_per = 3
 
         colors = self._COLORS
+        dim_colors = self._COLORS_DIM
         lines: list[str] = []
 
         for i, (name, values) in enumerate(metric_data.items()):
             color = colors[i % len(colors)]
+            dim_color = dim_colors[i % len(dim_colors)]
             best = max(values)
             latest = values[-1]
-            mean = sum(values) / len(values)
             trend = self._trend_arrow(values)
 
-            # Metric header — trailing spaces INSIDE [/] to avoid Textual eating them
+            # Compact metric header
             lines.append(
                 f" [{color}]\u25cf {name}  [/]"
-                f"best: [{color} bold]{best:.4f}  [/]"
-                f"latest: [bold]{latest:.4f}[/]{trend}"
-                f"  [dim]mean: {mean:.4f}  n={len(values)}[/]"
+                f"[bold {color}]{best:.4f} [/]"
+                f"[dim]best  [/]"
+                f"[bold]{latest:.4f}[/]{trend} "
+                f"[dim]latest  n={len(values)}[/]"
             )
 
             if len(values) < 2:
-                lines.append(f"   [dim]Single point: {values[0]:.4f}[/]")
+                # Single-value mini bar
+                lines.append(f"   [{color}]\u2588\u2588\u2588\u2588\u2588[/] {values[0]:.4f}")
             else:
-                chart_lines = self._render_line(values, chart_cols, rows_per, color)
+                chart_lines = self._render_area(
+                    values, chart_cols, rows_per, color, dim_color,
+                )
                 lines.extend(chart_lines)
 
-            # Separator between metrics
             if i < n_metrics - 1:
                 lines.append("")
 
         widget.update("\n".join(lines))
 
+    # Braille dot positions: (row 0-3, col 0-1) → bitmask
+    _DOT_MAP = [
+        [0x01, 0x08],
+        [0x02, 0x10],
+        [0x04, 0x20],
+        [0x40, 0x80],
+    ]
+
     @classmethod
-    def _render_line(cls, values: list[float], chart_cols: int,
-                     chart_rows: int, color: str) -> list[str]:
-        """Render a single braille line chart (line only, no area fill)."""
+    def _render_area(
+        cls,
+        values: list[float],
+        chart_cols: int,
+        chart_rows: int,
+        color: str,
+        dim_color: str,
+    ) -> list[str]:
+        """Render a braille area chart (4× vertical, 2× horizontal resolution).
+
+        All braille dots at or below the curve are set.  Character cells
+        containing the curve boundary use *color* (bright); cells that are
+        purely fill below the curve use *dim_color*.
+        """
         vmin, vmax = min(values), max(values)
         vrange = vmax - vmin
 
-        # Add 5% padding so line doesn't touch edges
         if vrange < 1e-9:
             vrange = max(abs(vmin) * 0.1, 0.01)
             vmin -= vrange / 2
@@ -393,88 +409,66 @@ class MetricChart(Vertical):
             vmax += pad
             vrange = vmax - vmin
 
-        px_w = chart_cols * 2
-        px_h = chart_rows * 4
-        grid = [[False] * px_w for _ in range(px_h)]
-
         n = len(values)
-        prev_py: int | None = None
+        px_w = chart_cols * 2   # 2 horizontal pixels per cell
+        px_h = chart_rows * 4   # 4 vertical pixels per cell
 
-        for px_x in range(px_w):
-            # Interpolate data value
-            data_x = px_x / max(1, px_w - 1) * (n - 1)
+        # Per-pixel-column height (0 = bottom, px_h-1 = top)
+        heights: list[int] = []
+        for gx in range(px_w):
+            data_x = gx / max(1, px_w - 1) * (n - 1)
             idx = int(data_x)
             frac = data_x - idx
             if idx >= n - 1:
                 v = values[-1]
             else:
                 v = values[idx] * (1 - frac) + values[idx + 1] * frac
+            h = (v - vmin) / vrange * (px_h - 1)
+            heights.append(max(0, min(px_h - 1, round(h))))
 
-            # Map to pixel Y (0 = bottom, px_h-1 = top)
-            py = int((v - vmin) / vrange * (px_h - 1) + 0.5)
-            py = max(0, min(px_h - 1, py))
-
-            # Draw line point
-            grid[py][px_x] = True
-
-            # Connect to previous point to avoid gaps
-            if prev_py is not None and abs(py - prev_py) > 1:
-                lo, hi = min(prev_py, py), max(prev_py, py)
-                for y in range(lo, hi + 1):
-                    grid[y][px_x] = True
-
-            prev_py = py
-
-        # Thicken line by 1 pixel upward for visibility
-        for px_x in range(px_w):
-            for py in range(px_h - 2, -1, -1):
-                if grid[py][px_x] and py + 1 < px_h:
-                    grid[py + 1][px_x] = True
-
-        # Convert grid to braille characters
-        y_labels = {0: vmax, chart_rows - 1: vmin}
         dot_map = cls._DOT_MAP
-
         lines: list[str] = []
-        for crow in range(chart_rows):
-            label = f"{y_labels[crow]:.4f}" if crow in y_labels else ""
-            axis_ch = "\u2524" if crow in y_labels else "\u2502"
 
-            row_chars: list[str] = []
-            has_dots = False
+        for crow in range(chart_rows):
+            # Y-axis label
+            if crow == 0:
+                label = f"{vmax:.4f} "
+            elif crow == chart_rows - 1:
+                label = f"{vmin:.4f} "
+            else:
+                label = " " * 8
+
+            # Build braille characters for this row
+            bright_parts: list[str] = []  # chars containing the line
+            dim_parts: list[str] = []     # chars that are pure fill
+            row_markup: list[str] = []
+
             for ccol in range(chart_cols):
                 code = 0x2800
+                has_line = False
+                has_any = False
+
                 for dy in range(4):
                     for dx in range(2):
+                        # pixel y: 0 = bottom of chart
                         gy = px_h - 1 - (crow * 4 + dy)
                         gx = ccol * 2 + dx
-                        if 0 <= gy < px_h and 0 <= gx < px_w and grid[gy][gx]:
-                            code |= dot_map[dy][dx]
-                row_chars.append(chr(code))
-                if code != 0x2800:
-                    has_dots = True
+                        if 0 <= gy and gx < px_w:
+                            h = heights[gx]
+                            if gy <= h:
+                                code |= dot_map[dy][dx]
+                                has_any = True
+                                if gy == h or gy == h - 1:
+                                    has_line = True
 
-            braille = "".join(row_chars)
-            prefix = f"[dim]{label:>8}{axis_ch}[/]"
-            if has_dots:
-                lines.append(f"{prefix}[{color}]{braille}[/]")
-            else:
-                lines.append(f"{prefix}{braille}")
+                ch = chr(code)
+                if has_line:
+                    row_markup.append(f"[{color}]{ch}[/]")
+                elif has_any:
+                    row_markup.append(f"[{dim_color}]{ch}[/]")
+                else:
+                    row_markup.append(" ")
 
-        # X-axis
-        lines.append(f"[dim]{' ' * 8}\u2514{'─' * chart_cols}[/]")
-
-        # X-axis labels
-        num_labels = min(n, max(3, chart_cols // 8))
-        x_line = [" "] * (chart_cols + 5)
-        for i in range(num_labels):
-            di = round(i / max(1, num_labels - 1) * (n - 1))
-            col = round(di / max(1, n - 1) * (chart_cols - 1)) if n > 1 else 0
-            text = str(di + 1)
-            if col + len(text) <= len(x_line):
-                if all(x_line[col + j] == " " for j in range(len(text))):
-                    for j, ch in enumerate(text):
-                        x_line[col + j] = ch
-        lines.append(f"[dim]{' ' * 9}{''.join(x_line).rstrip()}[/]")
+            lines.append(f"[dim]{label}[/]{''.join(row_markup)}")
 
         return lines
